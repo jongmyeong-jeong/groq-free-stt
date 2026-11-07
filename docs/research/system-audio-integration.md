@@ -1,6 +1,6 @@
 # 시스템 오디오 녹음 통합 조사
 
-조사일: 2026-10-26 (Asia/Seoul). 대상: [시스템 오디오 녹음 코드를 통합할 때의 제약 조사](https://github.com/jongmyeong-jeong/lonta/issues/4). 출시 버전: 해당 없음(조사 문서). 제품 코드와 UI는 변경하지 않았다.
+조사일: 2026-10-26 (Asia/Seoul). 대상: [시스템 오디오 녹음 코드를 통합할 때의 제약 조사](https://github.com/jongmyeong-jeong/groq-free-stt/issues/4). 출시 버전: 해당 없음(조사 문서). 제품 코드와 UI는 변경하지 않았다.
 
 ## 결론
 
@@ -42,7 +42,7 @@
 
 - **무음:** README는 출력이 멈춘 150초 후 5초를 재생한 실험에서 파일이 5.5초였다고 기록한다. 코드는 전달받은 frame 수로만 길이를 누적하며 별도 무음 패딩이나 wall-clock 매핑을 저장하지 않는다. 따라서 현 구현을 그대로 쓰면 전사의 시각은 파일 재생 위치이고 실제 회의 경과 시각과 달라질 수 있다. 이는 해당 환경의 관찰이며 모든 장치에서 같은 양상이 나온다는 뜻은 아니다. `README.md:41`, `Sources/sysrec/SystemAudioRecorder.swift:152`, `Sources/sysrec/RecorderController.swift:164`
 - **시스템 녹음과 탭 종료:** native 프로세스가 계속 살아 있으면 브라우저를 닫아도 녹음은 계속된다. README도 이를 명시한다. 시스템 녹음을 브라우저 소유 마이크와 똑같은 수명으로 표현할지는 제품 결정이다. `Sources/sysrec/RecorderController.swift:3`, `README.md:18`
-- **현재 마이크:** lonta는 브라우저의 getUserMedia/MediaRecorder가 캡처하며, 화면 unmount 때 recorder와 tracks를 멈춘다. beforeunload는 경고하고 마지막 청크의 flush를 시도할 뿐, finalize와 영구 복구를 보장하지 않는다. [Recording.jsx:143](../../reference/legacy-source/web/src/pages/Recording.jsx.txt#L143), [Recording.jsx:339](../../reference/legacy-source/web/src/pages/Recording.jsx.txt#L339)
+- **현재 마이크:** previous-app는 브라우저의 getUserMedia/MediaRecorder가 캡처하며, 화면 unmount 때 recorder와 tracks를 멈춘다. beforeunload는 경고하고 마지막 청크의 flush를 시도할 뿐, finalize와 영구 복구를 보장하지 않는다. [Recording.jsx:143](../../reference/legacy-source/web/src/pages/Recording.jsx.txt#L143), [Recording.jsx:339](../../reference/legacy-source/web/src/pages/Recording.jsx.txt#L339)
 - **현재 Python 서버:** startup은 진행 중 전사를 실패로 바꾸고 녹음 임시 폴더를 정리한다. 종료 시 전사 작업을 최대 120초 기다린다. 새 요구인 완료된 전사 구간 유지와 자동 재개는 이 동작으로 충족되지 않는다. native AAC 복구와 전사 작업의 지속성은 서로 다른 문제다. [server.py:243](../../reference/legacy-source/app/server.py.txt#L243), [recordings.py:142](../../reference/legacy-source/app/recordings.py.txt#L142)
 
 ## 최소 통합 후보와 남은 결정
@@ -67,7 +67,7 @@
 
 ## 참고 소스 스냅샷
 
-lonta의 기준 커밋: `b351bae9a7e7a3fe8aa5795f96a9314c24384c07`. sysrec는 Git 메타데이터가 없어 2026-10-26에 읽은 파일의 SHA-256을 아래에 남긴다. 오디오 파일과 UI 소스는 포함하지 않았다.
+previous-app의 기준 커밋: `b351bae9a7e7a3fe8aa5795f96a9314c24384c07`. sysrec는 Git 메타데이터가 없어 2026-10-26에 읽은 파일의 SHA-256을 아래에 남긴다. 오디오 파일과 UI 소스는 포함하지 않았다.
 
 | sysrec 상대 경로 | SHA-256 |
 | --- | --- |

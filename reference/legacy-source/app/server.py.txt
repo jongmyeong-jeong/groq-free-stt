@@ -1,4 +1,4 @@
-"""FastAPI app for lonta.
+"""FastAPI app for previous-app.
 
 Serves the static SPA (built into app/static/) and the /api/* routes listed in
 plan §4.2. Same-origin; no CORS; all SSE emitters add:
@@ -274,7 +274,7 @@ def create_app() -> FastAPI:
             )
             await asyncio.wait(list(_FINALIZE_TASKS), timeout=120)
 
-    app = FastAPI(title="lonta", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="previous-app", version="0.1.0", lifespan=lifespan)
 
     # Request-logging middleware (JSONL logger configured in app/__init__.py).
     @app.middleware("http")
@@ -725,7 +725,7 @@ def create_app() -> FastAPI:
 
                 # 2. Run batch transcription in a worker thread.
                 prompt = prompt_mod.load()
-                workdir = Path(tempfile.mkdtemp(prefix="lonta_batch_"))
+                workdir = Path(tempfile.mkdtemp(prefix="previous_batch_"))
                 try:
                     batch_result = await asyncio.to_thread(
                         batch_transcribe.run_batch_transcription,

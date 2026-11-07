@@ -18,8 +18,8 @@ class AppTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name)
-        (self.home / '.lonta').mkdir()
-        (self.home / '.lonta' / 'keep').write_text('untouched')
+        (self.home / '.previous-app').mkdir()
+        (self.home / '.previous-app' / 'keep').write_text('untouched')
         for filename in ('app.py', 'job_transcription.py', 'transcription.py', 'recordings.py', 'quota.py', 'source_jobs.py', 'system_capture.py', 'system_recovery.py'):
             shutil.copyfile(ROOT / filename, self.home / filename)
         shutil.copytree(ROOT / 'web', self.home / 'web')
@@ -251,7 +251,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(after['result']['txt'], 'hello')
         self.assertEqual(self.request('DELETE', f'/jobs/{job_id}')[0], 200)
         self.assertEqual(self.request('GET', f'/jobs/{job_id}')[0], 404)
-        self.assertEqual((self.home / '.lonta' / 'keep').read_text(), 'untouched')
+        self.assertEqual((self.home / '.previous-app' / 'keep').read_text(), 'untouched')
 
     def test_interrupted_recordings_are_listed_without_creating_jobs(self):
         recordings = self.home / '.groq-free-stt' / 'recordings'

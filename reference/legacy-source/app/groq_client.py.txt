@@ -3,7 +3,7 @@
 Single public function: transcribe_audio().
 
 Reads GROQ_API_KEY and TRANSCRIPTION_LANG from env at call time (not import time).
-Loads Whisper prompt from ~/.lonta/data/prompt.json if present.
+Loads Whisper prompt from ~/.previous-app/data/prompt.json if present.
 
 Schema of prompt.json (single string):
     {"prompt": "..."}
@@ -122,7 +122,7 @@ def transcribe_audio(
         (default: "ko").
     prompt:
         Optional Whisper conditioning prompt. If None, the module loads
-        ~/.lonta/data/prompt.json automatically.
+        ~/.previous-app/data/prompt.json automatically.
 
     Returns
     -------
