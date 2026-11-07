@@ -366,7 +366,8 @@ class Handler(BaseHTTPRequestHandler):
                         return self.reply(200, serialize(db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (parts[1],)).fetchone()))
                     if body.get('status') == 'stopped':
                         body['segments'] = []
-                        body['result'] = {}
+                        state = json.loads(row['result'])
+                        body['result'] = {key: state[key] for key in ('imported_at', 'recorded_at') if key in state}
                         # Cancel before releasing the active-job database constraint.
                         job_transcription.stop(parts[1])
                     if body:

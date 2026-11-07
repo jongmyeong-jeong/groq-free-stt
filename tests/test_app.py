@@ -367,6 +367,33 @@ class AppTest(unittest.TestCase):
         self.assertTrue(stopped['has_source'])
         self.assertEqual(self.request('POST', '/jobs', payload)[0], 201)
 
+    def test_stop_retry_preserves_source_metadata_for_upload_and_recording(self):
+        _, upload = self.request('POST', '/jobs', {'name': 'upload', 'source': 'YQ=='})
+        path = '/jobs/' + upload['id']
+        metadata = upload['result']['imported_at']
+        self.request('PATCH', path, {'result': {'imported_at': metadata, 'txt': 'partial', 'chunks': [1]}})
+        _, stopped = self.request('PATCH', path, {'status': 'stopped'})
+        self.assertEqual(stopped['result'], {'imported_at': metadata})
+        self.assertEqual(self.request('GET', path + '/txt')[0], 404)
+        status, retry = self.request('POST', path + '/retry', {})
+        self.assertEqual(status, 201)
+        self.assertEqual(retry['result'], {'imported_at': metadata})
+        self.request('PATCH', '/jobs/' + retry['id'], {'status': 'stopped'})
+        _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
+        recording_path = '/recordings/' + recording['id']
+        self.request('POST', recording_path + '/chunks', {'sequence': 0, 'data': 'YQ==', 'elapsed': 1})
+        self.request('POST', recording_path + '/finish', {'elapsed': 1})
+        _, job = self.request('POST', recording_path + '/jobs', {'name': 'recording'})
+        path = '/jobs/' + job['id']
+        metadata = job['result']['recorded_at']
+        self.request('PATCH', path, {'result': {'recorded_at': metadata, 'md': 'partial', 'chunks': [1]}})
+        _, stopped = self.request('PATCH', path, {'status': 'stopped'})
+        self.assertEqual(stopped['result'], {'recorded_at': metadata})
+        self.assertEqual(self.request('GET', path + '/md')[0], 404)
+        status, retry = self.request('POST', path + '/retry', {})
+        self.assertEqual(status, 201)
+        self.assertEqual(retry['result'], {'recorded_at': metadata})
+
     def test_rejects_cross_origin_and_untrusted_host(self):
         payload = {'name': 'audio', 'source': ''}
         self.assertEqual(self.request('POST', '/jobs', payload, {'Origin': 'https://evil.example', 'Content-Type': 'text/plain'})[0], 403)
@@ -380,7 +407,7 @@ class AppTest(unittest.TestCase):
         self.request('PATCH', path, {'status': 'stopped'})
         self.assertEqual(self.request('PATCH', path, {'status': 'completed', 'segments': [{'text': 'late'}], 'result': {'txt': 'late'}})[0], 409)
         _, stopped = self.request('GET', path)
-        self.assertEqual((stopped['status'], stopped['segments'], stopped['result']), ('stopped', [], {}))
+        self.assertEqual((stopped['status'], stopped['segments'], stopped['result']), ('stopped', [], {'imported_at': job['result']['imported_at']}))
 
     def test_existing_data_directory_is_private(self):
         self.stop()
