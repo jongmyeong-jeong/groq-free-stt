@@ -20,7 +20,7 @@ class AppTest(unittest.TestCase):
         self.home = Path(self.temp.name)
         (self.home / '.lonta').mkdir()
         (self.home / '.lonta' / 'keep').write_text('untouched')
-        for module in ('app.py', 'system_capture.py', 'system_recovery.py'):
+        for module in ('app.py', 'recordings.py', 'system_capture.py', 'system_recovery.py'):
             shutil.copyfile(ROOT / module, self.home / module)
         (self.home / '.env').write_text('GROQ_API_KEY=secret-key\n')
         self.start()
@@ -56,6 +56,42 @@ class AppTest(unittest.TestCase):
                 return response.status, json.loads(body)
         except urllib.error.HTTPError as error:
             return error.code, json.loads(error.read())
+
+    def test_shutdown_waits_for_recording_finish(self):
+        import threading
+        _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
+        key = recording['id']
+        self.request('POST', f'/recordings/{key}/chunks', {'sequence': 0, 'data': 'YQ==', 'elapsed': 1})
+        result = []
+        thread = threading.Thread(target=lambda: result.append(self.request('POST', '/shutdown', {})))
+        thread.start()
+        for _ in range(50):
+            if self.request('GET', '/recording-control')[1]['stop']:
+                break
+            time.sleep(.02)
+        self.assertTrue(thread.is_alive())
+        self.assertEqual(self.request('POST', f'/recordings/{key}/finish', {'elapsed': 2, 'recover': True})[0], 200)
+        self.assertEqual(self.request('GET', f'/recordings/{key}')[1]['status'], 'recovery_pending')
+        thread.join(3)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result[0][0], 200)
+        self.proc.communicate(timeout=3)
+
+    def test_recording_chunks_survive_restart_without_creating_a_job(self):
+        status, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
+        self.assertEqual(status, 201)
+        key = recording['id']
+        self.assertEqual(self.request('POST', f'/recordings/{key}/chunks', {
+            'sequence': 0, 'data': base64.b64encode(b'fragment').decode(), 'elapsed': 3
+        })[0], 200)
+        self.stop()
+        self.start()
+        _, recordings = self.request('GET', '/recordings')
+        self.assertEqual(len(recordings), 1)
+        self.assertEqual(recordings[0]['status'], 'recovery_pending')
+        self.assertEqual(recordings[0]['elapsed'], 3)
+        self.assertEqual(self.request('GET', '/jobs')[1], [])
+        self.assertEqual(self.request('GET', f'/recordings/{key}/source')[1]['source'], base64.b64encode(b'fragment').decode())
 
     def test_data_survives_restart_and_source_can_be_deleted_separately(self):
         status, job = self.request('POST', '/jobs', {'name': 'audio.wav', 'source': base64.b64encode(b'audio').decode()})
