@@ -84,3 +84,18 @@ class RequestControllerTests(unittest.TestCase):
             for _ in range(7):
                 self.assertIsNone(ledger.reserve(900))
             self.assertEqual(ledger.reserve(1), 4600)
+
+    def test_three_consecutive_429s_stop_and_remain_stopped_after_restart(self):
+        from quota import RetryExhausted
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            clock = lambda: 1000
+            client = Client([ResponseError(429, {'retry-after': '0'})] * 3)
+            controller = RequestController(client, QuotaLedger(path / 'quota', clock), RetryPolicy(path / 'retry', clock))
+            with self.assertRaises(RetryExhausted):
+                controller.send('audio', 10)
+            self.assertEqual(client.calls, 3)
+            controller = RequestController(client, QuotaLedger(path / 'quota', clock), RetryPolicy(path / 'retry', clock))
+            with self.assertRaises(RetryExhausted):
+                controller.send('audio', 10)
+            self.assertEqual(client.calls, 3)
