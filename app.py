@@ -203,20 +203,16 @@ class Handler(BaseHTTPRequestHandler):
                             return self.reply(404, {'error': 'Source not found'})
                         return self.reply(200, {'source': base64.b64encode(source).decode()})
                     if self.command == 'DELETE':
-                        stored = db.execute('SELECT source_path FROM jobs WHERE id = ?', (parts[1],)).fetchone()
-                        db.execute('UPDATE jobs SET source = NULL, source_path = NULL WHERE id = ?', (parts[1],))
-                        db.commit()
-                        if stored['source_path']:
-                            Path(stored['source_path']).unlink(missing_ok=True)
+                        if not job_transcription.delete(DATA / 'jobs.sqlite3', parts[1], source_only=True):
+                            return self.reply(409, {'error': '전사를 정지하거나 완료한 후 삭제하세요.'})
                         return self.reply(200, {'ok': True})
+                elif len(parts) == 3:
+                    return self.reply(405, {'error': 'Method not allowed'})
                 elif self.command == 'GET':
                     return self.reply(200, serialize(row))
                 elif self.command == 'DELETE':
-                    stored = db.execute('SELECT source_path FROM jobs WHERE id = ?', (parts[1],)).fetchone()
-                    db.execute('DELETE FROM jobs WHERE id = ?', (parts[1],))
-                    db.commit()
-                    if stored['source_path']:
-                        Path(stored['source_path']).unlink(missing_ok=True)
+                    if not job_transcription.delete(DATA / 'jobs.sqlite3', parts[1]):
+                        return self.reply(409, {'error': '전사를 정지하거나 완료한 후 삭제하세요.'})
                     return self.reply(200, {'ok': True})
                 elif self.command == 'PATCH':
                     if set(body) - {'status', 'segments', 'usage', 'result'}:
@@ -229,6 +225,8 @@ class Handler(BaseHTTPRequestHandler):
                     if body.get('status') == 'stopped':
                         body['segments'] = []
                         body['result'] = {}
+                        # Cancel before releasing the active-job database constraint.
+                        job_transcription.stop(parts[1])
                     if body:
                         assignments = ', '.join(f'{key} = ?' for key in body)
                         values = [value if key == 'status' else json.dumps(value) for key, value in body.items()]
@@ -239,8 +237,6 @@ class Handler(BaseHTTPRequestHandler):
                     elif row['status'] == 'stopped':
                         return self.reply(409, {'error': 'Job is stopped'})
                     db.commit()
-                    if body.get('status') == 'stopped':
-                        job_transcription.stop(parts[1])
                     return self.reply(200, serialize(db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (parts[1],)).fetchone()))
                 return self.reply(405, {'error': 'Method not allowed'})
         except sqlite3.IntegrityError:

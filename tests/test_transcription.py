@@ -127,6 +127,8 @@ class TransportTest(unittest.TestCase):
         class Connection:
             def __init__(self, *args, **kwargs):
                 pass
+            def connect(self):
+                pass
             def request(self, method, path, body, headers):
                 received.append(body)
             def getresponse(self):
@@ -141,7 +143,94 @@ class TransportTest(unittest.TestCase):
         self.assertIn(b'\r\n\r\nko\r\n', received[0])
         self.assertIn(b'verbose_json', received[0])
 
+    def test_cancel_during_connect_prevents_request(self):
+        import tempfile
+        import threading
+        from pathlib import Path
+        from unittest.mock import patch
+        from transcription import GroqClient
+        connecting, release, sent = threading.Event(), threading.Event(), []
+        class Connection:
+            sock = None
+            def __init__(self, *args, **kwargs):
+                pass
+            def connect(self):
+                connecting.set()
+                release.wait(3)
+            def request(self, *args):
+                sent.append(True)
+            def close(self):
+                pass
+        with tempfile.TemporaryDirectory() as tmp, patch('http.client.HTTPSConnection', Connection):
+            audio = Path(tmp) / 'audio.wav'
+            audio.write_bytes(b'audio')
+            client = GroqClient('test')
+            errors = []
+            def send():
+                try:
+                    client.transcribe(audio)
+                except Exception as error:
+                    errors.append(error)
+            worker = threading.Thread(target=send)
+            worker.start()
+            self.assertTrue(connecting.wait(3))
+            client.cancel()
+            release.set()
+            worker.join(3)
+            self.assertFalse(worker.is_alive())
+            self.assertTrue(errors)
+            self.assertEqual(sent, [])
+
 class JobTest(unittest.TestCase):
+    def test_delete_and_new_worker_wait_for_stopped_worker_to_exit(self):
+        import sqlite3
+        import subprocess
+        import tempfile
+        import threading
+        from pathlib import Path
+        from unittest.mock import patch
+        import job_transcription
+        entered, release = threading.Event(), threading.Event()
+        class BlockingClient:
+            cancelled = False
+            def __init__(self, key):
+                pass
+            def transcribe(self, path):
+                entered.set()
+                release.wait(3)
+                return [{'start': 0, 'end': 1, 'text': 'discarded'}]
+            def cancel(self):
+                self.cancelled = True
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / 'source.wav'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono',
+                            '-t', '2', str(audio)], check=True)
+            db_path = Path(tmp) / 'jobs.sqlite3'
+            with sqlite3.connect(db_path) as db:
+                db.execute('CREATE TABLE jobs (id TEXT, name TEXT, source BLOB, status TEXT, segments TEXT, result TEXT, source_path TEXT)')
+                db.executemany('INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)', [
+                    ('1', 'audio.wav', audio.read_bytes(), 'transcribing', '[]', '{}', None),
+                    ('2', 'audio.wav', audio.read_bytes(), 'transcribing', '[]', '{}', None)])
+            with patch.object(job_transcription, 'GroqClient', BlockingClient):
+                job_transcription.start(db_path, '1', 'test')
+                try:
+                    self.assertTrue(entered.wait(3))
+                    with sqlite3.connect(db_path) as db:
+                        db.execute("UPDATE jobs SET status = 'stopped' WHERE id = '1'")
+                    job_transcription.stop('1')
+                    self.assertFalse(job_transcription.delete(db_path, '1'))
+                    self.assertFalse(job_transcription.delete(db_path, '1', source_only=True))
+                    with self.assertRaises(ValueError):
+                        job_transcription.start(db_path, '2', 'test')
+                finally:
+                    release.set()
+                    for _ in range(100):
+                        if job_transcription.delete(db_path, '1'):
+                            break
+                        threading.Event().wait(.02)
+                    else:
+                        self.fail('stopped worker did not exit')
+
     def test_worker_saves_completed_result_to_job(self):
         import json
         import sqlite3
