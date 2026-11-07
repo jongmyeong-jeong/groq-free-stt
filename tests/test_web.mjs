@@ -15,3 +15,10 @@ test('job states are labelled for the user', () => {
 test('failed requests expose the server error', async () => {
   await assert.rejects(request('/jobs', {}, async () => ({ok:false, status:409, json:async () => ({error:'이미 진행 중'})})), /이미 진행 중/);
 });
+
+test('recording recovery states explain available actions', async () => {
+  const { recordingLabel, canTranscribeRecording } = await import('../web/app.mjs');
+  assert.equal(recordingLabel('recovery_failed'), '복구 실패');
+  assert.equal(canTranscribeRecording('recovery_failed'), false);
+  assert.equal(canTranscribeRecording('recovered'), true);
+});
