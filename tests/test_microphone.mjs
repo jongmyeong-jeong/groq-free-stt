@@ -180,3 +180,29 @@ test('shutdown finalization failure reports an error instead of a successful sto
   assert.match((await reported).message, /finish failed/);
   assert.equal(success, false);
 });
+
+test('microphone access denial explains how to grant permission without claiming a job exists', async () => {
+  const { failureNotice } = await import('../web/app.mjs');
+  const denied = new DOMException('Permission denied', 'NotAllowedError');
+  await assert.rejects(MicrophoneRecording.start({
+    mediaDevices: {getUserMedia: async () => { throw denied; }}, Recorder: class {}, storage: {}
+  }), error => {
+    const notice = failureNotice(error);
+    assert.match(notice, /마이크.*권한/);
+    assert.match(notice, /브라우저.*설정/);
+    assert.match(notice, /다시/);
+    assert.doesNotMatch(notice, /전사 목록/);
+    return true;
+  });
+});
+
+test('missing microphone and recording storage failure get distinct guidance', async () => {
+  const { failureNotice } = await import('../web/app.mjs');
+  await assert.rejects(MicrophoneRecording.start({
+    mediaDevices: {getUserMedia: async () => { throw new DOMException('No device', 'NotFoundError'); }}, Recorder: class {}, storage: {}
+  }), error => { assert.match(failureNotice(error), /마이크.*연결/); assert.doesNotMatch(failureNotice(error), /전사 목록/); return true; });
+  await assert.rejects(MicrophoneRecording.start({
+    mediaDevices: {getUserMedia: async () => ({getTracks: () => [{stop() {}}]})}, Recorder: class {},
+    storage: {start: async () => { throw new DOMException('저장 실패', 'NotAllowedError'); }}
+  }), error => { assert.match(failureNotice(error), /저장 실패/); assert.doesNotMatch(failureNotice(error), /마이크 권한|전사 목록/); return true; });
+});

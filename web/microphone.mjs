@@ -1,14 +1,23 @@
+export class MicrophoneAccessError extends Error {
+  constructor(cause) { super(cause.message, {cause}); this.name = 'MicrophoneAccessError'; }
+}
+export class MicrophoneStartError extends Error {
+  constructor(cause) { super(cause.message, {cause}); this.name = 'MicrophoneStartError'; }
+}
+
 // Storage provides start(mimeType), append(id, sequence, Blob, elapsed), and finish(id, seconds).
 export class MicrophoneRecording {
   static async start({storage, mediaDevices = navigator.mediaDevices, Recorder = MediaRecorder, clock = () => performance.now(), onError = () => {}, onServerStop = () => {}}) {
-    const stream = await mediaDevices.getUserMedia({audio: true});
+    let stream;
+    try { stream = await mediaDevices.getUserMedia({audio: true}); }
+    catch (error) { throw new MicrophoneAccessError(error); }
     try {
       const recorder = new Recorder(stream);
       const entry = await storage.start(recorder.mimeType || 'audio/webm');
       return new MicrophoneRecording(stream, recorder, entry.id, storage, clock, onError, onServerStop);
     } catch (error) {
       stream.getTracks().forEach(track => track.stop());
-      throw error;
+      throw new MicrophoneStartError(error);
     }
   }
 
