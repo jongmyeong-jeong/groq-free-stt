@@ -24,6 +24,8 @@ make stop   # 서버 종료
 
 ## 제한
 
+- **STT 모델:** [Whisper Large V3 (`whisper-large-v3`)](https://console.groq.com/docs/model/whisper-large-v3)를 사용하며 한국어 전사로 요청합니다.
+- **Groq Free 한도:** 모델 기준 분당 20회(RPM), 하루 2,000회(RPD), 시간당 오디오 7,200초(ASH), 하루 28,800초(ASD)입니다. 계정·조직별 실제 한도는 다를 수 있으므로 [Groq Rate Limits](https://console.groq.com/docs/rate-limits)에서 확인하세요.
 - Groq 사용 한도는 로컬 기록을 기준으로 추정하므로 실제 한도와 다를 수 있습니다. 429 응답이 세 번 연속 발생하면 수동으로 계속해야 합니다.
 - 중단된 녹음은 보관된 녹음에서 확인하고 전사할 수 있지만, 마지막 구간 유실이나 손상된 녹음의 복구 실패가 발생할 수 있습니다. 정상 종료에는 `make stop`을 사용하세요.
 - 시스템 오디오 원본은 장시간 녹음 시 디스크 공간을 많이 사용하며 WAV 크기 제한을 넘으면 복구할 수 없습니다. 권한 거부와 실제 무음은 구별되지 않을 수 있습니다.
