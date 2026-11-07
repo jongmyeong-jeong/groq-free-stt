@@ -76,3 +76,15 @@ test('ambiguous request failure directs user to the refreshed job list', async (
   assert.match(failureNotice(new Error('연결 실패')), /연결 실패/);
   assert.match(failureNotice(new Error('연결 실패')), /목록/);
 });
+
+test('render restores an existing control or moves focus to the new heading', async () => {
+  const { focusAfterRender } = await import('../web/app.mjs');
+  let focused = '';
+  const heading = {focus() { focused = 'heading'; }};
+  const control = {tagName:'BUTTON', textContent:'제목 수정', disabled:false, focus() { focused = 'control'; }};
+  const root = {querySelectorAll: () => [control], querySelector: () => heading};
+  focusAfterRender(root, {index:0, tag:'BUTTON', text:'제목 수정'});
+  assert.equal(focused, 'control');
+  focusAfterRender(root, {index:0, tag:'BUTTON', text:'다른 화면'});
+  assert.equal(focused, 'heading');
+});

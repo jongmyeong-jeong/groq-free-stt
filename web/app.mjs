@@ -24,6 +24,14 @@ export function retryJob(id, fetcher = fetch) { return request(`/jobs/${encodeUR
 
 export function checkMicrophoneRecovery(id, fetcher = fetch) { return request(`/recordings/${encodeURIComponent(id)}/check`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}, fetcher); }
 
+export function focusAfterRender(root, previous) {
+  if (!previous) return;
+  const controls = [...root.querySelectorAll('button,a')];
+  const match = controls[previous.index];
+  if (match && !match.disabled && match.tagName === previous.tag && match.textContent === previous.text) match.focus();
+  else (root.querySelector('h1') || root.querySelector('main'))?.focus();
+}
+
 if (typeof document !== 'undefined') start();
 function start() {
   const root = document.querySelector('#app');
@@ -39,8 +47,11 @@ function start() {
   function confirmAction(message, action) { if (window.confirm(message)) run(action); }
   function link(job, format) { const a = el('a', format.toUpperCase()); a.href = `/jobs/${encodeURIComponent(job.id)}/${format}`; a.download = ''; return a; }
   function render() {
+    const focused = document.activeElement;
+    const controls = [...root.querySelectorAll('button,a')];
+    const previous = root.contains(focused) ? {index:controls.indexOf(focused), tag:focused.tagName, text:focused.textContent} : null;
     root.replaceChildren();
-    const main = el('main', null, 'shell'); root.append(main);
+    const main = el('main', null, 'shell'); main.tabIndex = -1; root.append(main);
     if (notice) { const alert = el('p', notice, 'notice'); alert.setAttribute('role', 'alert'); main.append(alert); }
     if (systemRecording) {
       main.append(el('h1', paused ? '시스템 소리 일시 정지' : '시스템 소리 녹음 중'));
@@ -99,8 +110,10 @@ function start() {
       if (!['transcribing','paused','waiting_limit'].includes(job.status)) actions.append(button('전체 삭제', () => confirmAction(deletionMessage('job'), async () => { await request(`/jobs/${id}`, {method:'DELETE'}); selected = null; })));
       main.append(actions);
     }
+    const heading = main.querySelector('h1'); if (heading) heading.tabIndex = -1;
+    focusAfterRender(root, previous);
   }
   refresh().catch(error => { notice = error.message; }).finally(render);
   setInterval(() => { if (systemRecording) request('/system-recording/heartbeat', json({})).catch(error => { notice = error.message; systemRecording = null; render(); }); }, 5000);
-  setInterval(async () => { if (busy || recording || systemRecording) return; const before = JSON.stringify([jobs, recordings, systemRecordings]); try { await refresh(); if (JSON.stringify([jobs, recordings, systemRecordings]) !== before) { const focused = document.activeElement; const controls = [...root.querySelectorAll('button,a')]; const index = controls.indexOf(focused); const label = focused?.textContent; render(); if (index >= 0) { const next = [...root.querySelectorAll('button,a')]; (next.find(node => node.textContent === label) || next[Math.min(index, next.length - 1)])?.focus(); } } } catch {} }, 3000);
+  setInterval(async () => { if (busy || recording || systemRecording) return; const before = JSON.stringify([jobs, recordings, systemRecordings]); try { await refresh(); if (JSON.stringify([jobs, recordings, systemRecordings]) !== before) render(); } catch {} }, 3000);
 }
