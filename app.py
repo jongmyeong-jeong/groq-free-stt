@@ -3,15 +3,20 @@ import base64
 import binascii
 import json
 import os
+import signal
 import sqlite3
+import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from system_capture import SystemCapture
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path.home() / '.groq-free-stt'
 ACTIVE = ('transcribing', 'paused', 'waiting_limit')
 STATUSES = (*ACTIVE, 'completed', 'stopped')
+capture = SystemCapture(DATA / 'recordings', ROOT / 'build' / 'SystemCapture.app' / 'Contents' / 'MacOS' / 'SystemCapture')
 
 
 def load_env():
@@ -79,6 +84,24 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length)) if length else {}
             if not isinstance(body, dict):
                 raise ValueError()
+            if parts == ['shutdown'] and self.command == 'POST':
+                self.reply(200, {'ok': True})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
+            if parts == ['system-recordings'] and self.command == 'GET':
+                return self.reply(200, capture.recoveries())
+            if parts == ['system-recording'] and self.command == 'GET':
+                return self.reply(200, capture.status())
+            if len(parts) == 2 and parts[0] == 'system-recording' and self.command == 'POST':
+                actions = {'start': capture.start, 'pause': capture.pause, 'resume': capture.resume,
+                           'stop': capture.stop, 'heartbeat': capture.heartbeat}
+                if parts[1] in actions:
+                    return self.reply(200, actions[parts[1]]())
+            if len(parts) == 3 and parts[0] == 'system-recordings' and parts[2] == 'source' and self.command == 'GET':
+                item = next((item for item in capture.recoveries() if item['id'] == parts[1] and item['status'] == 'recovered'), None)
+                if item is None:
+                    return self.reply(404, {'error': 'Recovered source not found'})
+                return self.reply(200, {'source': base64.b64encode((DATA / 'recordings' / item['source']).read_bytes()).decode()})
             with connect() as db:
                 if parts == ['jobs'] and self.command == 'POST':
                     name, encoded = body['name'], body['source']
@@ -137,6 +160,8 @@ class Handler(BaseHTTPRequestHandler):
                     db.commit()
                     return self.reply(200, serialize(db.execute('SELECT id, name, status, source IS NOT NULL AS has_source, segments, usage, result FROM jobs WHERE id = ?', (parts[1],)).fetchone()))
                 return self.reply(405, {'error': 'Method not allowed'})
+        except RuntimeError as error:
+            return self.reply(409, {'error': str(error)})
         except sqlite3.IntegrityError:
             return self.reply(409, {'error': 'An unfinished transcription already exists'})
         except (ValueError, KeyError, TypeError, binascii.Error, json.JSONDecodeError):
@@ -150,4 +175,13 @@ if __name__ == '__main__':
     init()
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '8765'))), Handler)
     print(f'http://127.0.0.1:{server.server_port}', flush=True)
-    server.serve_forever()
+    def terminate(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, terminate)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        capture.stop()
+        server.server_close()

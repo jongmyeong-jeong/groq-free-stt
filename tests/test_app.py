@@ -20,7 +20,8 @@ class AppTest(unittest.TestCase):
         self.home = Path(self.temp.name)
         (self.home / '.lonta').mkdir()
         (self.home / '.lonta' / 'keep').write_text('untouched')
-        shutil.copyfile(ROOT / 'app.py', self.home / 'app.py')
+        for module in ('app.py', 'system_capture.py', 'system_recovery.py'):
+            shutil.copyfile(ROOT / module, self.home / module)
         (self.home / '.env').write_text('GROQ_API_KEY=secret-key\n')
         self.start()
 
@@ -79,6 +80,20 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.request('DELETE', f'/jobs/{job_id}')[0], 200)
         self.assertEqual(self.request('GET', f'/jobs/{job_id}')[0], 404)
         self.assertEqual((self.home / '.lonta' / 'keep').read_text(), 'untouched')
+
+    def test_interrupted_recordings_are_listed_without_creating_jobs(self):
+        recordings = self.home / '.groq-free-stt' / 'recordings'
+        recordings.mkdir(exist_ok=True)
+        recording_id = 'd' * 32
+        (recordings / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
+        status, recovered = self.request('GET', '/system-recordings')
+        self.assertEqual(status, 200)
+        self.assertEqual(recovered, [{'id': recording_id, 'status': 'recovered', 'source': recording_id + '.wav'}])
+        self.assertEqual(self.request('GET', '/jobs')[1], [])
+        self.assertEqual(self.request('GET', '/system-recordings')[1], recovered)
+        status, source = self.request('GET', '/system-recordings/' + recording_id + '/source')
+        self.assertEqual(status, 200)
+        self.assertTrue(base64.b64decode(source['source']).startswith(b'RIFF'))
 
     def test_only_one_unfinished_job_and_stop_discards_partial_transcript(self):
         payload = {'name': 'audio.wav', 'source': base64.b64encode(b'audio').decode()}
