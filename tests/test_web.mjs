@@ -56,3 +56,11 @@ test('microphone recordings and retries create jobs on the server', async () => 
   assert.deepEqual(JSON.parse(calls[0].options.body), {name:'녹음.webm'});
   assert.equal(calls[1].path, '/jobs/old/retry');
 });
+
+test('microphone recovery is checked on the server', async () => {
+  const { checkMicrophoneRecovery } = await import('../web/app.mjs');
+  let sent;
+  await checkMicrophoneRecovery('rec', async (path, options) => { sent = {path, options}; return {ok:true, json:async () => ({status:'recovered'})}; });
+  assert.equal(sent.path, '/recordings/rec/check');
+  assert.equal(sent.options.body, '{}');
+});
