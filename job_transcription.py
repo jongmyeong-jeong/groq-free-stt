@@ -1,11 +1,15 @@
 """Background transcription jobs backed by the application's SQLite store."""
 import json
 import os
+import errno
+import shutil
 import sqlite3
 import tempfile
 import threading
 import time
 import wave
+
+import source_jobs
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +20,31 @@ from quota import (QuotaLedger, RetryPolicy, RequestController, WaitForLimit,
 _workers = {}
 _lock = threading.Lock()
 _admission = threading.Lock()
+
+
+def cleanup_temporary_files(db_path):
+    """Remove only our abandoned directories; leave live processes and links alone."""
+    root = Path(db_path).parent / 'transcription-tmp'
+    if root.is_symlink():
+        raise ValueError('임시 저장 경로가 올바르지 않습니다.')
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root.chmod(0o700)
+    for path in root.iterdir():
+        parts = path.name.split('-', 2)
+        if len(parts) != 3 or parts[0] not in ('job', 'chunks') or not parts[1].isdigit():
+            continue
+        if path.is_symlink() or not path.is_dir():
+            continue
+        pid = int(parts[1])
+        if pid <= 0:
+            continue
+        try:
+            os.kill(pid, 0)
+        except (OverflowError, ValueError):
+            continue
+        except OSError as error:
+            if error.errno == errno.ESRCH:
+                shutil.rmtree(path)
 
 
 def start(db_path, job_id, key, manual=True):
@@ -47,6 +76,12 @@ def stop(job_id):
         client = _workers.get(job_id)
         if client:
             client.cancel()
+
+
+def retry(db_path, job_id):
+    """Copy a stopped source while excluding concurrent worker and delete operations."""
+    with _lock:
+        return source_jobs.retry(db_path, job_id)
 
 
 def delete(db_path, job_id, source_only=False):
@@ -104,6 +139,7 @@ def recover(db_path, key):
 
 def _run(db_path, job_id, name, source, source_path, state, client):
     directory = Path(db_path).parent
+    temporary_root = directory / 'transcription-tmp'
     controller = RequestController(client, QuotaLedger(directory / 'quota.json'),
                                    RetryPolicy(directory / 'retry.json'), lambda: client.cancelled)
 
@@ -173,12 +209,17 @@ def _run(db_path, job_id, name, source, source_path, state, client):
                     time.sleep(min(.25, max(0, wait.until - time.time())))
 
     try:
-        with tempfile.TemporaryDirectory() as tmp:
+        if temporary_root.is_symlink():
+            raise ValueError('임시 저장 경로가 올바르지 않습니다.')
+        temporary_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary_root, prefix=f'job-{os.getpid()}-') as tmp:
             path = Path(source_path) if source_path else Path(tmp) / 'source'
             if not source_path:
                 path.write_bytes(source)
             result = transcribe_file(path, name, state['imported_at'], send, save,
-                                     cancelled=lambda: client.cancelled, completed=state.get('chunks'), propagate_errors=True)
+                                     cancelled=lambda: client.cancelled, completed=state.get('chunks'), propagate_errors=True,
+                                     partial_errors=(Exception,), partial_exclusions=(PauseRequested, RequestCancelled),
+                                     temporary_root=temporary_root)
         if result is not None:
             state.update(result)
             state.pop('wait_until', None)
@@ -188,13 +229,15 @@ def _run(db_path, job_id, name, source, source_path, state, client):
     except (PauseRequested, RequestCancelled):
         pass
     except (AudioError, AuthenticationFailed, RetryExhausted) as error:
+        state.update(getattr(error, 'partial_result', {}))
         state['error'] = ('Groq API 키를 확인하고 서버를 다시 시작하세요.' if isinstance(error, AuthenticationFailed)
                           else '요청을 재개하려면 확인이 필요합니다.' if isinstance(error, RetryExhausted) else str(error))
         if isinstance(error, AuthenticationFailed):
             state['error_code'] = 'authentication'
         with sqlite3.connect(db_path) as db:
             db.execute("UPDATE jobs SET status = 'paused', result = ? WHERE id = ? AND status != 'stopped'", (json.dumps(state), job_id))
-    except Exception:
+    except Exception as error:
+        state.update(getattr(error, 'partial_result', {}))
         state['error'] = '전사 중 오류가 발생했습니다.'
         with sqlite3.connect(db_path) as db:
             db.execute("UPDATE jobs SET status = 'paused', result = ? WHERE id = ? AND status != 'stopped'", (json.dumps(state), job_id))

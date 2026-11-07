@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import job_transcription
+import source_jobs
 from recordings import RecordingStore
 
 ROOT = Path(__file__).resolve().parent
@@ -153,11 +154,26 @@ class Handler(BaseHTTPRequestHandler):
                                 return self.reply(409, {'error': 'Server is stopping'})
                             recording = store.start(body['mime_type'])
                         return self.reply(201, recording)
+                if len(parts) == 3 and self.command == 'POST' and parts[2] == 'jobs':
+                    try:
+                        job_id = source_jobs.from_recording(DATA / 'jobs.sqlite3', store.path, parts[1], body['name'])
+                    except ValueError as error:
+                        return self.reply(409, {'error': str(error)})
+                    except OSError:
+                        return self.reply(503, {'error': '녹음 원본을 복사하지 못했습니다.'})
+                    with connect() as db:
+                        row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
+                    return self.reply(201, serialize(row))
                 if len(parts) == 3 and self.command == 'POST' and parts[2] == 'chunks':
                     store.append(parts[1], body['sequence'], base64.b64decode(body['data'], validate=True), body['elapsed'])
                     return self.reply(200, {'ok': True})
                 if len(parts) == 3 and self.command == 'POST' and parts[2] == 'finish':
                     return self.reply(200, store.finish(parts[1], body['elapsed'], body.get('recover', False)))
+                if len(parts) == 3 and self.command == 'POST' and parts[2] == 'check':
+                    try:
+                        return self.reply(200, source_jobs.check_recording(store, parts[1]))
+                    except OSError:
+                        return self.reply(503, {'error': '음성 복구 검증을 실행하지 못했습니다. ffmpeg 설치를 확인하세요.'})
                 if len(parts) == 3 and self.command == 'POST' and parts[2] == 'validate':
                     return self.reply(200, store.validate(parts[1], body['playable']))
                 if len(parts) == 3 and self.command == 'GET' and parts[2] == 'source':
@@ -186,12 +202,21 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(201, serialize(row))
                 if parts == ['jobs'] and self.command == 'GET':
                     return self.reply(200, [serialize(row) for row in db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs ORDER BY rowid DESC')])
-                if len(parts) not in (2, 3) or parts[0] != 'jobs' or (len(parts) == 3 and parts[2] not in ('source', 'transcribe', 'md', 'txt')):
+                if len(parts) not in (2, 3) or parts[0] != 'jobs' or (len(parts) == 3 and parts[2] not in ('source', 'transcribe', 'retry', 'md', 'txt')):
 
                     return self.reply(404, {'error': 'Not found'})
                 row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (parts[1],)).fetchone()
                 if row is None:
                     return self.reply(404, {'error': 'Not found'})
+                if len(parts) == 3 and parts[2] == 'retry' and self.command == 'POST':
+                    try:
+                        job_id = job_transcription.retry(DATA / 'jobs.sqlite3', parts[1])
+                    except ValueError as error:
+                        return self.reply(409, {'error': str(error)})
+                    except OSError:
+                        return self.reply(503, {'error': '보관 원본을 복사하지 못했습니다.'})
+                    row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
+                    return self.reply(201, serialize(row))
                 if len(parts) == 3 and parts[2] == 'transcribe' and self.command == 'POST':
                     try:
                         job_transcription.start(DATA / 'jobs.sqlite3', parts[1], os.environ.get('GROQ_API_KEY'))
@@ -275,6 +300,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     load_env()
     init()
+    job_transcription.cleanup_temporary_files(DATA / 'jobs.sqlite3')
     job_transcription.recover(DATA / 'jobs.sqlite3', os.environ.get('GROQ_API_KEY'))
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '8765'))), Handler)
     server.recordings = RecordingStore(DATA)

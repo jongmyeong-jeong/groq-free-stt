@@ -46,8 +46,7 @@ class AudioError(ValueError):
     pass
 
 
-def split_audio(source, directory):
-    """Yield (start, end, PCM WAV path); all offsets are in source seconds."""
+def audio_duration(source):
     try:
         probe = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
                                 '-of', 'default=noprint_wrappers=1:nokey=1', str(source)],
@@ -57,6 +56,12 @@ def split_audio(source, directory):
             raise ValueError()
     except (OSError, subprocess.CalledProcessError, ValueError):
         raise AudioError('지원하지 않거나 손상된 음성 파일입니다.')
+    return duration
+
+
+def split_audio(source, directory):
+    """Yield (start, end, PCM WAV path); all offsets are in source seconds."""
+    duration = audio_duration(source)
     # PCM mono at 16 kHz fits well below 20 MB in 600 seconds, including its header.
     scan = subprocess.run(['ffmpeg', '-nostdin', '-i', str(source), '-af',
                            'silencedetect=noise=-35dB:d=0.4', '-f', 'null', '-'],
@@ -88,7 +93,7 @@ def split_audio(source, directory):
 
 
 def transcribe_file(source, name, imported_at, transcribe, checkpoint, cancelled=lambda: False, completed=None,
-                    propagate_errors=False):
+                    propagate_errors=False, partial_errors=(), partial_exclusions=(), temporary_root=None):
     """Transcribe in order; checkpoint each success; report failures as missing ranges.
 
     `transcribe` is the external API boundary and returns timed segments relative to
@@ -99,8 +104,10 @@ def transcribe_file(source, name, imported_at, transcribe, checkpoint, cancelled
     segments, missing = [], []
     for chunk in completed:
         segments = merge_segments(segments, chunk['segments'], chunk['start'])
-    with tempfile.TemporaryDirectory() as tmp:
+    import os
+    with tempfile.TemporaryDirectory(dir=temporary_root, prefix=f'chunks-{os.getpid()}-') as tmp:
         failed = False
+        partial_error = None
         for start, end, path in split_audio(source, tmp):
             if cancelled():
                 return None
@@ -112,11 +119,15 @@ def transcribe_file(source, name, imported_at, transcribe, checkpoint, cancelled
                 continue
             try:
                 incoming = transcribe(path)
-            except Exception:
+            except Exception as error:
                 if cancelled():
                     return None
                 if propagate_errors:
-                    raise
+                    if not isinstance(error, partial_errors) or isinstance(error, partial_exclusions):
+                        raise
+                    partial_error = error
+                    missing.append((start, audio_duration(source)))
+                    break
                 failed = True
                 missing.append((start, end))
                 continue
@@ -126,6 +137,9 @@ def transcribe_file(source, name, imported_at, transcribe, checkpoint, cancelled
             completed.append({'start': start, 'end': end, 'segments': incoming})
             checkpoint({'chunks': list(completed), 'segments': list(segments)})
     result = render_transcript(name, imported_at, segments, missing)
+    if partial_error is not None:
+        partial_error.partial_result = {**result, 'complete': False, 'segments': segments, 'missing': missing}
+        raise partial_error
     return {**result, 'complete': not missing, 'segments': segments, 'missing': missing}
 
 class GroqError(RuntimeError):
