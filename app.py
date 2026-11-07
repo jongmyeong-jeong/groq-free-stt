@@ -77,6 +77,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(403, {'error': 'Forbidden'})
         if self.command in ('POST', 'PATCH') and self.headers.get_content_type() != 'application/json':
             return self.reply(403, {'error': 'Forbidden'})
+        if self.command == 'GET' and self.path in ('/', '/app.mjs', '/microphone.mjs', '/style.css'):
+            name = 'index.html' if self.path == '/' else self.path[1:]
+            data = (ROOT / 'web' / name).read_bytes()
+            kind = {'index.html': 'text/html', 'style.css': 'text/css', 'app.mjs': 'text/javascript', 'microphone.mjs': 'text/javascript'}[name]
+            self.send_response(200)
+            self.send_header('Content-Type', f'{kind}; charset=utf-8')
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Content-Security-Policy', "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+            self.end_headers()
+            self.wfile.write(data)
+            return
         parts = self.path.strip('/').split('/')
         try:
             length = int(self.headers.get('Content-Length', '0'))
@@ -150,7 +162,9 @@ class Handler(BaseHTTPRequestHandler):
                     db.commit()
                     return self.reply(200, {'ok': True})
                 elif self.command == 'PATCH':
-                    if set(body) - {'status', 'segments', 'usage', 'result'}:
+                    if set(body) - {'name', 'status', 'segments', 'usage', 'result'}:
+                        raise ValueError()
+                    if 'name' in body and (not isinstance(body['name'], str) or not body['name'].strip()):
                         raise ValueError()
                     if 'status' in body and body['status'] not in STATUSES:
                         raise ValueError()
@@ -162,8 +176,8 @@ class Handler(BaseHTTPRequestHandler):
                         body['result'] = {}
                     if body:
                         assignments = ', '.join(f'{key} = ?' for key in body)
-                        values = [value if key == 'status' else json.dumps(value) for key, value in body.items()]
-                        updated = db.execute(f"UPDATE jobs SET {assignments} WHERE id = ? AND status != 'stopped'",
+                        values = [value if key in ('status', 'name') else json.dumps(value) for key, value in body.items()]
+                        updated = db.execute(f"UPDATE jobs SET {assignments} WHERE id = ?" + (" AND status != 'stopped'" if set(body) != {'name'} else ''),
                                              (*values, parts[1]))
                         if not updated.rowcount:
                             return self.reply(409, {'error': 'Job is stopped'})

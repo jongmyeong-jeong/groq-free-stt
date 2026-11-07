@@ -22,6 +22,7 @@ class AppTest(unittest.TestCase):
         (self.home / '.lonta' / 'keep').write_text('untouched')
         shutil.copyfile(ROOT / 'app.py', self.home / 'app.py')
         shutil.copyfile(ROOT / 'recordings.py', self.home / 'recordings.py')
+        shutil.copytree(ROOT / 'web', self.home / 'web')
         (self.home / '.env').write_text('GROQ_API_KEY=secret-key\n')
         self.start()
 
@@ -56,6 +57,19 @@ class AppTest(unittest.TestCase):
                 return response.status, json.loads(body)
         except urllib.error.HTTPError as error:
             return error.code, json.loads(error.read())
+
+    def test_web_is_served_and_other_paths_are_not_files(self):
+        with urllib.request.urlopen(self.url + '/') as response:
+            self.assertIn(b'Groq Free STT', response.read())
+            self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+            self.assertIn("frame-ancestors 'none'", response.headers['Content-Security-Policy'])
+        self.assertEqual(self.request('GET', '/..%2Fapp.py')[0], 404)
+
+    def test_job_title_can_be_changed_after_stopping(self):
+        _, job = self.request('POST', '/jobs', {'name': 'old', 'source': 'YQ=='})
+        self.request('PATCH', f"/jobs/{job['id']}", {'status': 'stopped'})
+        status, renamed = self.request('PATCH', f"/jobs/{job['id']}", {'name': 'new'})
+        self.assertEqual((status, renamed['name']), (200, 'new'))
 
     def test_shutdown_waits_for_recording_finish(self):
         import threading
