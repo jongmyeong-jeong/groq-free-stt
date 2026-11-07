@@ -22,3 +22,9 @@ test('recording recovery states explain available actions', async () => {
   assert.equal(canTranscribeRecording('recovery_failed'), false);
   assert.equal(canTranscribeRecording('recovered'), true);
 });
+
+test('deletion explains retained recording copies', async () => {
+  const { deletionMessage } = await import('../web/app.mjs');
+  assert.match(deletionMessage('source'), /보관된 녹음.*별도/);
+  assert.match(deletionMessage('job'), /보관된 녹음.*별도/);
+});
