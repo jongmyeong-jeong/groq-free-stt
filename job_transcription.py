@@ -6,6 +6,8 @@ import tempfile
 import threading
 import time
 import wave
+
+import source_jobs
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -47,6 +49,12 @@ def stop(job_id):
         client = _workers.get(job_id)
         if client:
             client.cancel()
+
+
+def retry(db_path, job_id):
+    """Copy a stopped source while excluding concurrent worker and delete operations."""
+    with _lock:
+        return source_jobs.retry(db_path, job_id)
 
 
 def delete(db_path, job_id, source_only=False):

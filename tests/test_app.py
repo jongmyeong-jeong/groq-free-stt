@@ -20,7 +20,7 @@ class AppTest(unittest.TestCase):
         self.home = Path(self.temp.name)
         (self.home / '.lonta').mkdir()
         (self.home / '.lonta' / 'keep').write_text('untouched')
-        for filename in ('app.py', 'job_transcription.py', 'transcription.py', 'recordings.py', 'quota.py'):
+        for filename in ('app.py', 'job_transcription.py', 'transcription.py', 'recordings.py', 'quota.py', 'source_jobs.py'):
             shutil.copyfile(ROOT / filename, self.home / filename)
         (self.home / '.env').write_text('GROQ_API_KEY=secret-key\n')
         self.start()
@@ -113,6 +113,56 @@ class AppTest(unittest.TestCase):
         self.assertEqual(job['status'], 'paused')
         self.assertIn('음성 파일', job['result']['error'])
         self.assertIn('imported_at', job['result'])
+    def test_recovery_validation_runs_on_server_and_preserves_bad_audio(self):
+        import io
+        import wave
+        audio = io.BytesIO()
+        with wave.open(audio, 'wb') as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(8000)
+            wav.writeframes(b'\0' * 1600)
+        for data, expected in ((audio.getvalue(), 'recovered'), (b'broken', 'recovery_failed')):
+            _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/wav'})
+            key = recording['id']
+            self.request('POST', f'/recordings/{key}/chunks', {'sequence': 0, 'data': base64.b64encode(data).decode(), 'elapsed': 1})
+            self.request('POST', f'/recordings/{key}/finish', {'elapsed': 1, 'recover': True})
+            status, checked = self.request('POST', f'/recordings/{key}/check', {})
+            self.assertEqual(status, 200)
+            self.assertEqual(checked['status'], expected)
+            self.assertEqual(self.request('GET', f'/recordings/{key}/source')[1]['source'], base64.b64encode(data).decode())
+
+    def test_recording_can_create_large_job_and_stopped_job_can_be_retried(self):
+        import sqlite3
+        _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
+        key = recording['id']
+        db_path = self.home / '.groq-free-stt' / 'recordings.sqlite3'
+        block = b'x' * 1_000_000
+        with sqlite3.connect(db_path) as db:
+            db.executemany('INSERT INTO chunks VALUES (?, ?, ?)', [(key, n, block) for n in range(65)])
+        self.request('POST', f'/recordings/{key}/finish', {'elapsed': 70})
+        status, job = self.request('POST', f'/recordings/{key}/jobs', {'name': 'recording.webm'})
+        self.assertEqual(status, 201)
+        with sqlite3.connect(self.home / '.groq-free-stt' / 'jobs.sqlite3') as db:
+            path = Path(db.execute('SELECT source_path FROM jobs WHERE id = ?', (job['id'],)).fetchone()[0])
+        self.assertEqual(path.stat().st_size, 65_000_000)
+        self.assertEqual(self.request('POST', f'/recordings/{key}/jobs', {'name': 'again.webm'})[0], 409)
+        self.assertEqual(self.request('PATCH', f"/jobs/{job['id']}", {'status': 'stopped'})[0], 200)
+        status, retried = self.request('POST', f"/jobs/{job['id']}/retry", {})
+        self.assertEqual(status, 201)
+        self.assertNotEqual(job['id'], retried['id'])
+        self.assertTrue(retried['has_source'])
+        self.assertEqual(self.request('DELETE', f"/jobs/{retried['id']}/source")[0], 409)
+        self.assertEqual(self.request('DELETE', f"/jobs/{job['id']}/source")[0], 200)
+        self.assertTrue(self.request('GET', f"/jobs/{retried['id']}")[1]['has_source'])
+
+    def test_unfinished_or_empty_recording_cannot_create_job(self):
+        _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
+        key = recording['id']
+        self.assertEqual(self.request('POST', f'/recordings/{key}/jobs', {'name': 'live.webm'})[0], 409)
+        self.request('POST', f'/recordings/{key}/finish', {'elapsed': 1})
+        self.assertEqual(self.request('POST', f'/recordings/{key}/jobs', {'name': 'empty.webm'})[0], 409)
+
     def test_shutdown_waits_for_recording_finish(self):
         import threading
         _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
