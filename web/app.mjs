@@ -77,11 +77,11 @@ function start() {
     } else {
       const job = selected, id = encodeURIComponent(job.id);
       main.append(button('← 뒤로 가기', home, 'back'));
-      const title = el('h1', job.name); main.append(title, el('p', failedStarts.has(job.id) && job.status === 'transcribing' ? '전사 시작 실패' : statusLabel(job.status), 'hint'));
+      const title = el('h1', job.name); main.append(title, el('p', failedStarts.has(job.id) && job.status === 'transcribing' ? '전사 시작 상태 확인 필요' : statusLabel(job.status), 'hint'));
       if (job.status === 'completed') { const text = job.result?.text || job.result?.transcript || job.result?.txt; if (text) main.append(el('pre', text)); else main.append(el('p', '다운로드 파일에서 전사 내용을 확인하세요.', 'hint')); const downloads = el('div', null, 'actions'); for (const format of availableDownloads(job)) downloads.append(link(job, format)); main.append(downloads); }
       if (job.status !== 'completed' && availableDownloads(job).length) { main.append(el('p', '부분 전사 결과를 다운로드할 수 있습니다.', 'hint')); const downloads = el('div', null, 'actions'); for (const format of availableDownloads(job)) downloads.append(link(job, format)); main.append(downloads); }
       if (['transcribing','paused','waiting_limit'].includes(job.status)) {
-        main.append(el('p', failedStarts.has(job.id) && job.status === 'transcribing' ? '전사를 시작하지 못했습니다. 문제를 해결한 뒤 다시 시작하세요.' : '전사가 백그라운드에서 진행됩니다. 화면을 떠나도 정지되지 않습니다.', 'hint'));
+        main.append(el('p', failedStarts.has(job.id) && job.status === 'transcribing' ? '전사 시작 여부를 확인하지 못했습니다. 연결을 확인한 뒤 다시 시작할 수 있습니다. 이미 진행 중이면 중복 시작은 거절됩니다.' : '전사가 백그라운드에서 진행됩니다. 화면을 떠나도 정지되지 않습니다.', 'hint'));
         if (job.status === 'waiting_limit' && Number.isFinite(job.result?.wait_until)) main.append(el('p', `자동 재시도 예정: ${new Date(job.result.wait_until * 1000).toLocaleString()}`, 'hint'));
         if (job.result?.pause_requested) main.append(el('p', '현재 구간을 마친 뒤 일시 정지합니다.', 'hint'));
         if (job.result?.error) main.append(el('p', job.result.error, 'notice'));
