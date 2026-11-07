@@ -64,3 +64,22 @@ test('pagehide requests recording stop', async () => {
   listener();
   assert.equal(stopped, true);
 });
+
+test('server shutdown request stops capture and preserves it for recovery', async () => {
+  let finished;
+  const done = new Promise(resolve => { finished = resolve; });
+  let trackStopped = false;
+  class Recorder {
+    constructor() { this.mimeType = 'audio/webm'; this.state = 'inactive'; }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; this.ondataavailable({data: new Blob(['audio'])}); this.onstop(); }
+  }
+  await MicrophoneRecording.start({
+    mediaDevices: {getUserMedia: async () => ({getTracks: () => [{stop: () => { trackStopped = true; }}]})},
+    Recorder, clock: () => 5000,
+    storage: {start: async () => ({id: 'one'}), append: async () => {},
+      control: async () => ({stop: true}), finish: async (...args) => finished(args)}
+  });
+  assert.deepEqual(await done, ['one', 0, true]);
+  assert.equal(trackStopped, true);
+});

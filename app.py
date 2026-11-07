@@ -86,7 +86,8 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ['recording-control'] and self.command == 'GET':
                 return self.reply(200, {'stop': self.server.stopping.is_set()})
             if parts == ['shutdown'] and self.command == 'POST':
-                self.server.stopping.set()
+                with self.server.recording_start_lock:
+                    self.server.stopping.set()
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and any(item['status'] == 'recording' for item in self.server.recordings.list()):
                     time.sleep(.05)
@@ -99,9 +100,11 @@ class Handler(BaseHTTPRequestHandler):
                     if self.command == 'GET':
                         return self.reply(200, store.list())
                     if self.command == 'POST':
-                        if self.server.stopping.is_set():
-                            return self.reply(409, {'error': 'Server is stopping'})
-                        return self.reply(201, store.start(body['mime_type']))
+                        with self.server.recording_start_lock:
+                            if self.server.stopping.is_set():
+                                return self.reply(409, {'error': 'Server is stopping'})
+                            recording = store.start(body['mime_type'])
+                        return self.reply(201, recording)
                 if len(parts) == 3 and self.command == 'POST' and parts[2] == 'chunks':
                     store.append(parts[1], body['sequence'], base64.b64decode(body['data'], validate=True), body['elapsed'])
                     return self.reply(200, {'ok': True})
@@ -186,6 +189,7 @@ if __name__ == '__main__':
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '8765'))), Handler)
     server.recordings = RecordingStore(DATA)
     server.stopping = threading.Event()
+    server.recording_start_lock = threading.Lock()
     print(f'http://127.0.0.1:{server.server_port}', flush=True)
     try:
         server.serve_forever()
