@@ -164,6 +164,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(200, {'source': base64.b64encode(store.source(parts[1])).decode()})
                 if len(parts) == 2 and self.command == 'GET':
                     return self.reply(200, store.get(parts[1]))
+                if len(parts) == 2 and self.command == 'DELETE':
+                    store.delete(parts[1])
+                    return self.reply(200, {'ok': True})
                 return self.reply(404, {'error': 'Not found'})
             with connect() as db:
                 if parts == ['jobs'] and self.command == 'POST':

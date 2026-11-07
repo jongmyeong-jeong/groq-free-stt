@@ -55,3 +55,17 @@ class RecordingStoreTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class RecordingDeletionTest(unittest.TestCase):
+    def test_delete_removes_saved_recording_and_rejects_active_capture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = RecordingStore(tmp)
+            item = store.start('audio/webm')
+            store.append(item['id'], 0, b'audio', 1)
+            with self.assertRaises(ValueError):
+                store.delete(item['id'])
+            store.finish(item['id'], 2)
+            store.delete(item['id'])
+            self.assertEqual(store.list(), [])
+            with self.assertRaises(KeyError):
+                store.source(item['id'])

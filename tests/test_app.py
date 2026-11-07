@@ -127,6 +127,15 @@ class AppTest(unittest.TestCase):
         self.assertEqual(job['status'], 'paused')
         self.assertIn('음성 파일', job['result']['error'])
         self.assertIn('imported_at', job['result'])
+    def test_finished_recording_can_be_deleted_separately(self):
+        _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
+        key = recording['id']
+        self.request('POST', f'/recordings/{key}/chunks', {'sequence': 0, 'data': 'YQ==', 'elapsed': 1})
+        self.assertEqual(self.request('DELETE', f'/recordings/{key}')[0], 400)
+        self.request('POST', f'/recordings/{key}/finish', {'elapsed': 1})
+        self.assertEqual(self.request('DELETE', f'/recordings/{key}')[0], 200)
+        self.assertEqual(self.request('GET', '/recordings')[1], [])
+
     def test_shutdown_waits_for_recording_finish(self):
         import threading
         _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})

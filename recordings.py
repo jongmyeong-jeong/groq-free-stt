@@ -99,6 +99,17 @@ class RecordingStore:
                 raise ValueError('Recording is not awaiting validation')
         return self.get(recording_id)
 
+    def delete(self, recording_id):
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT status FROM recordings WHERE id = ?', (recording_id,)).fetchone()
+            if row is None:
+                raise KeyError(recording_id)
+            if row['status'] == 'recording':
+                raise ValueError('Cannot delete an active recording')
+            db.execute('DELETE FROM chunks WHERE recording_id = ?', (recording_id,))
+            db.execute('DELETE FROM recordings WHERE id = ?', (recording_id,))
+
     def source(self, recording_id):
         self.get(recording_id)
         with self._connect() as db:
