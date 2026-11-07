@@ -25,3 +25,10 @@ API는 JSON을 사용한다. `POST /jobs`에 `name`과 base64 인코딩한 `sour
 미완료 상태의 작업은 하나만 허용한다. 정지하면 부분 전사와 결과는 지우고
 원본과 사용량은 보존한다. `GET /jobs/{id}/source`는 원본을 base64로 돌려준다.
 `DELETE /jobs/{id}/source`는 원본만, `DELETE /jobs/{id}`는 전체 항목을 지운다.
+
+긴 업로드는 `POST /uploads`에 `application/octet-stream` 본문과 URL 인코딩한
+`X-Filename` 헤더를 보내면 디스크로 스트리밍한다. 기존 JSON 업로드는 메모리
+사용을 제한하기 위해 원본 64 MB까지 허용한다. FFmpeg와 FFprobe가 필요하다.
+`POST /jobs/{id}/transcribe`로 전사를 시작하고 `GET /jobs/{id}/md` 또는
+`GET /jobs/{id}/txt`로 결과를 다운로드한다. 실패한 구간은 부분 결과에 표시한다.
+이 API는 아직 화면에 연결되지 않았으며 한도 제어와 재시작 자동 재개는 후속 작업이다.
