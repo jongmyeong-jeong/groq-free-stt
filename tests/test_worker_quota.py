@@ -196,3 +196,100 @@ class WorkerQuotaTest(unittest.TestCase):
                     time.sleep(.01)
                 self.assertEqual(status, 'paused')
                 self.assertEqual(json.loads(result)['chunks'][0]['segments'][0]['text'], 'kept')
+
+    def test_authentication_error_provides_partial_transcript_and_missing_range(self):
+        class Client:
+            cancelled = False
+            calls = 0
+            def __init__(self, key): pass
+            def transcribe(self, path, on_start=None):
+                if on_start: on_start()
+                Client.calls += 1
+                if Client.calls == 1:
+                    return [{'start': 1, 'end': 2, 'text': '보존된 내용'}]
+                raise GroqError(401, {})
+            def cancel(self): self.cancelled = True
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source.wav'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '605', str(source)], check=True)
+            db_path = root / 'jobs.sqlite3'
+            with sqlite3.connect(db_path) as db:
+                db.execute('CREATE TABLE jobs (id TEXT, name TEXT, source BLOB, status TEXT, segments TEXT, result TEXT, source_path TEXT)')
+                db.execute('INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)', ('6', 'audio.wav', source.read_bytes(), 'transcribing', '[]', '{}', None))
+            with patch.object(job_transcription, 'GroqClient', Client):
+                job_transcription.start(db_path, '6', 'old')
+                for _ in range(300):
+                    with sqlite3.connect(db_path) as db:
+                        status, result = db.execute('SELECT status, result FROM jobs').fetchone()
+                    if status == 'paused': break
+                    time.sleep(.01)
+                result = json.loads(result)
+                self.assertEqual(status, 'paused')
+                self.assertEqual(result['error_code'], 'authentication')
+                for kind in ('md', 'txt'):
+                    self.assertIn('보존된 내용', result[kind])
+                    self.assertIn('전사되지 않은 구간', result[kind])
+                self.assertFalse(result['complete'])
+                self.assertEqual(Client.calls, 2)
+
+    def test_startup_removes_only_owned_temporary_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            temp_root = root / 'transcription-tmp'
+            temp_root.mkdir()
+            stale = temp_root / 'job-99999999-abandoned'
+            stale.mkdir()
+            (stale / 'source').write_text('temporary')
+            chunks = temp_root / 'chunks-99999999-abandoned'
+            chunks.mkdir()
+            (chunks / 'chunk.wav').write_text('temporary')
+            active = temp_root / ('job-%d-active' % __import__('os').getpid())
+            active.mkdir()
+            unrelated = temp_root / 'keep'
+            unrelated.mkdir()
+            outside = root / 'outside'
+            outside.mkdir()
+            (outside / 'keep').write_text('safe')
+            (temp_root / 'job-99999999-link').symlink_to(outside, target_is_directory=True)
+            job_transcription.cleanup_temporary_files(root / 'jobs.sqlite3')
+            self.assertFalse(stale.exists())
+            self.assertFalse(chunks.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertTrue(active.exists())
+            self.assertTrue((outside / 'keep').exists())
+
+    def test_retry_exhaustion_preserves_partial_transcript(self):
+        class Client:
+            cancelled = False
+            calls = 0
+            def __init__(self, key): pass
+            def transcribe(self, path, on_start=None):
+                if on_start: on_start()
+                Client.calls += 1
+                if Client.calls == 1:
+                    return [{'start': 1, 'end': 2, 'text': '이전 구간'}]
+                raise OSError('offline')
+            def cancel(self): self.cancelled = True
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source.wav'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '605', str(source)], check=True)
+            db_path = root / 'jobs.sqlite3'
+            with sqlite3.connect(db_path) as db:
+                db.execute('CREATE TABLE jobs (id TEXT, name TEXT, source BLOB, status TEXT, segments TEXT, result TEXT, source_path TEXT)')
+                db.execute('INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)', ('7', 'audio.wav', source.read_bytes(), 'transcribing', '[]', '{}', None))
+            with patch.object(job_transcription, 'GroqClient', Client):
+                job_transcription.start(db_path, '7', 'test')
+                for _ in range(300):
+                    with sqlite3.connect(db_path) as db:
+                        status, result = db.execute('SELECT status, result FROM jobs').fetchone()
+                    if status == 'paused': break
+                    time.sleep(.01)
+                result = json.loads(result)
+                self.assertEqual(status, 'paused')
+                for kind in ('md', 'txt'):
+                    self.assertIn('이전 구간', result[kind])
+                    self.assertIn('전사되지 않은 구간', result[kind])
+                self.assertFalse(result['complete'])
+                self.assertEqual(Client.calls, 4)
