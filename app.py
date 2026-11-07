@@ -349,6 +349,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     load_env()
     init()
+    job_transcription.cleanup_temporary_files(DATA / 'jobs.sqlite3')
     job_transcription.recover(DATA / 'jobs.sqlite3', os.environ.get('GROQ_API_KEY'))
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '8765'))), Handler)
     server.recordings = RecordingStore(DATA)
