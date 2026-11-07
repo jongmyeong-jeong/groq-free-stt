@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>local.groqfreestt.SystemCapture</string>
+<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleVersion</key><string>0.1.0</string>
 <key>CFBundleName</key><string>Groq Free STT System Capture</string>
 <key>CFBundleExecutable</key><string>SystemCapture</string>
 <key>CFBundlePackageType</key><string>APPL</string>

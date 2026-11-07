@@ -1,63 +1,53 @@
-# Groq Free STT
+# Groq Free STT 0.1.0
 
-This repository is a starting point for a local transcription application. The application has not been implemented or released yet.
+Mac에서 시스템 소리, 마이크 또는 음성 파일을 녹음·전사하는 로컬 앱입니다. 음성 전사는 Groq API로 전송하여 처리합니다. 작업과 결과는 이 Mac에 저장됩니다.
 
-The research in `docs/research/` and the UI source in `reference/prototype/` preserve prior investigation and the approved screen prototype. The prototype is a historical reference, not the product: its controls use mock data, and the surrounding legacy web code contains calls for a previous backend. Do not use it with a live backend or personal data.
+## 준비와 실행
 
-The new application will keep its data in `~/.groq-free-stt/`. Existing `~/.lonta/` data remains untouched and is not migrated automatically. The intended first release is 0.1.0.
+- macOS 14.2 이상, Python 3, `make`, Swift 컴파일러와 `codesign`이 필요합니다. Swift 도구는 Xcode 또는 Xcode Command Line Tools로 준비합니다.
+- `ffmpeg`와 `ffprobe`를 설치하고 PATH에서 실행할 수 있어야 합니다. 음성 분할과 복구 확인에 사용합니다.
+- Groq API 키가 필요합니다. 시스템 소리 녹음에는 macOS의 시스템 오디오 녹음 권한, 마이크에는 브라우저와 macOS의 마이크 권한을 허용해야 합니다. 거부했다면 시스템 설정의 개인정보 보호 및 보안과 브라우저 권한 설정을 확인하세요.
 
-Decisions and requirements: [decision map](https://github.com/jongmyeong-jeong/lonta/issues/2), [screen flow](https://github.com/jongmyeong-jeong/lonta/issues/8), and [migration](https://github.com/jongmyeong-jeong/lonta/issues/9).
+저장소 디렉터리에서 실행합니다.
 
-## 로컬 실행 및 데이터
+```sh
+make setup
+```
 
-macOS에서 Python 3를 설치한 후 `make setup`을 실행하고 `.env`에
-`GROQ_API_KEY`를 입력한다. `make start`는 `http://127.0.0.1:8765`에서
-로컬 저장 API를 실행한다. 기존 `.env`는 setup이 덮어쓰지 않는다.
+`make setup`은 `.env`가 없으면 `.env.example`에서 만들고 시스템 오디오 helper를 빌드·서명합니다. 기존 `.env`는 덮어쓰지 않습니다. `.env`에 키를 입력하세요.
 
-작업 데이터는 `~/.groq-free-stt/jobs.sqlite3`에 저장한다. 기존 `~/.lonta`는
-읽거나 이관하지 않는다. 현재는 저장 및 시스템 녹음 API의 초기 구현이며 전사 및 웹 화면은
-후속 구현 범위다. `make test`로 격리된 임시 HOME에서 통합 테스트를 실행한다.
+```dotenv
+GROQ_API_KEY=여기에_키_입력
+```
 
-API는 JSON을 사용한다. `POST /jobs`에 `name`과 base64 인코딩한 `source`를
-보내 작업을 만들고, `GET /jobs` 또는 `GET /jobs/{id}`로 조회한다.
-`PATCH /jobs/{id}`는 `status`, `segments`, `usage`, `result`를 저장한다.
-상태는 `transcribing`, `paused`, `waiting_limit`, `completed`, `stopped`다.
-미완료 상태의 작업은 하나만 허용한다. 정지하면 부분 전사와 결과는 지우고
-원본과 사용량은 보존한다. `GET /jobs/{id}/source`는 원본을 base64로 돌려준다.
-`GET /jobs/{id}/source-stream`은 원본을 바이너리로 스트리밍한다. 기존 base64
-조회는 64 MB를 넘는 파일에서 413을 반환한다. `DELETE /jobs/{id}/source`는
-원본만, `DELETE /jobs/{id}`는 전체 항목을 지운다.
+```sh
+make start
+```
 
-긴 업로드는 `POST /uploads`에 `application/octet-stream` 본문과 URL 인코딩한
-`X-Filename` 헤더를 보내면 디스크로 스트리밍한다. 기존 JSON 업로드는 메모리
-사용을 제한하기 위해 원본 64 MB까지 허용한다. FFmpeg와 FFprobe가 필요하다.
-`POST /jobs/{id}/transcribe`로 전사를 시작하고 `GET /jobs/{id}/md` 또는
-`GET /jobs/{id}/txt`로 결과를 다운로드한다. 실패한 구간은 부분 결과에 표시한다.
-이 API는 아직 화면에 연결되지 않았으며 한도 제어와 재시작 자동 재개는 후속 작업이다.
+브라우저에서 <http://127.0.0.1:8765>를 엽니다. 서버를 정상 종료하려면 다른 터미널에서 같은 디렉터리의 `make stop`을 실행합니다. `PORT` 환경 변수로 포트를 바꾼 경우 두 명령에 같은 값을 지정하세요. 키를 변경한 후에는 서버를 다시 시작하세요.
 
-## 시스템 오디오 구현 상태
+## 사용
 
-macOS 14.2 이상에서 `make setup`은 Swift 도구와 코드 서명을 사용해 시스템
-오디오 helper를 빌드한다. 최초 캡처 시 시스템 오디오 녹음 권한이 요청될 수
-있으며, 거부된 경우 시스템 설정의 개인정보 보호 및 보안에서 허용해야 한다.
-무음과 권한 거부는 확실히 구별할 수 없다. 현재 helper는 48kHz 모노 Float32
-시스템 오디오만 지원하며, 다른 형식은 녹음을 시작하지 않는다.
+홈에서 입력을 선택합니다. 한 번에 진행 중인 전사 작업은 하나입니다.
 
-서버 API의 `POST /system-recording/start`, `/pause`, `/resume`, `/stop`과
-`/heartbeat`는 녹음을 제어한다. 클라이언트는 녹음 중 15초 이내마다 heartbeat를
-보내야 한다. 시작 요청은 `starting`을 즉시 반환하며 권한 응답을 최대 5분
-기다린다. 일시 정지와 재개는 helper가 명령 처리를 확인한 뒤 성공한다.
-통신이 중단되거나 서버가 종료되면 helper가 종료되며,
-`GET /system-recordings`에서 복구 성공 또는 실패를 조회할 수 있다. 복구된
-녹음의 원본은 `GET /system-recordings/{id}/source`에서 WAV 스트림으로 가져올 수 있다.
-`POST /system-recordings/{id}/create-job`은 원본을 복사하여 전사 작업을 만든다.
-복구는 자동 전사를 시작하지 않고 PCM 원본을 남긴다. helper가 아직 파일을
-쓰는 동안은 복구를 기다리며, 실패한 helper의 유효한 부분 원본은 실패 상태로
-표시하고 사용자가 가져갈 수 있다. 손상된 원본도 보관한다. `make stop`은 서버를
-정상 종료하며 먼저 녹음을 마무리한다. PCM은 장시간 녹음에 디스크 공간을
-사용하며, WAV 형식의 크기 제한을 넘거나 파일이 손상되면 복구에 실패한다.
-강제 종료나 저장 장치 장애에서 마지막 구간의 보존은 보장하지 않는다.
+- **시스템 소리:** Mac에서 재생할 소리를 켜고 녹음을 시작합니다. 일시 정지·계속 후 녹음 종료를 누르면 보관된 녹음에서 **전사**를 선택합니다. 권한 거부와 실제 무음은 구별되지 않을 수 있습니다.
+- **마이크:** 권한을 허용하고 녹음합니다. 녹음 종료 후 전사가 시작됩니다. 일시 정지 중에는 녹음 시간에 무음이 포함됩니다.
+- **음성 파일:** 파일을 선택하면 업로드 후 전사가 시작됩니다. 브라우저 파일 선택기는 오디오와 MP4, MPEG, MPGA를 허용하며, 실제 디코딩 가능 여부는 FFmpeg에 달려 있습니다. 긴 파일은 구간으로 나누어 순차 전사합니다.
 
-**아직 제품 화면에 연결되지 않았고 실제 시스템 오디오, 권한, 긴 무음,
-일시 정지 및 강제 종료에 대한 실기기 검증이 필요하다.** 현재 테스트는
-helper를 대체한 프로세스와 복구 API를 검증한다.
+전사 상세 화면에서 일시 정지, 계속 또는 정지할 수 있습니다. 일시 정지는 진행 중인 구간이 끝난 뒤 적용됩니다. 정지하면 부분 전사 결과는 삭제되고 원본은 보관됩니다. 정지한 항목은 원본이 있으면 다시 전사할 수 있습니다. 완료되거나 부분 결과가 있는 항목은 목록 또는 상세 화면에서 MD와 TXT를 다운로드할 수 있습니다. 전사되지 않은 구간은 결과에 표시됩니다.
+
+## 한도와 복구
+
+앱은 로컬 기록을 기준으로 요청을 제한하고 한도에 도달하면 예정 시각까지 기다린 뒤 자동 재시도합니다. 이 계산은 Groq의 실제 한도를 보장하지 않습니다. 다른 앱이나 기기에서 같은 계정을 사용하면 로컬 기록에 반영되지 않아 429 응답이 발생할 수 있습니다. 429의 `Retry-After`를 따르며, 값이 없거나 유효하지 않으면 24시간 기다립니다. 연속 세 번 429가 발생하면 일시 정지하고 사용자가 계속을 눌러야 합니다. Groq의 정책과 실제 사용량은 Groq에서 확인하세요.
+
+서버 재시작 시 진행 중이거나 한도 대기 중인 전사는 저장된 구간부터 재개됩니다. 사용자가 일시 정지한 작업은 계속을 눌러 재개합니다. 중단된 녹음은 홈의 **보관된 녹음**에서 확인합니다. 마이크의 **복구 확인** 후 유효한 녹음은 전사할 수 있습니다. 시스템 소리의 유효한 부분 원본도 전사할 수 있습니다. 복구는 전체 녹음의 보존을 보장하지 않습니다. 브라우저나 서버의 강제 종료, 저장 실패 시 마지막 구간이 유실될 수 있고 손상된 녹음은 복구에 실패할 수 있습니다. 시스템 오디오의 PCM 원본은 장시간 녹음 시 많은 디스크 공간을 사용하며 WAV 크기 제한을 넘으면 복구할 수 없습니다. 정상 종료에는 `make stop`을 사용하세요.
+
+데이터는 `~/.groq-free-stt/`에 저장됩니다. 작업과 전사 결과, 녹음 조각, 원본 파일과 한도 기록을 포함합니다. 전사 항목에서 원본만 삭제하거나 전체 항목을 삭제할 수 있으며, 별도로 보관된 녹음은 해당 목록에서 삭제합니다. 기존 `~/.lonta/` 데이터는 자동으로 읽거나 이관하지 않습니다.
+
+## 검증 상태
+
+자동 검증은 `make test`로 Python 테스트를, `node --test tests/*.mjs`로 브라우저 모듈 테스트를 실행합니다. Node.js는 앱 실행에는 필요하지 않고 후자의 테스트에 필요합니다. 문서 작성 환경에서 Node 테스트 23개는 통과했습니다. Python 전체 테스트는 로컬 포트 바인딩이 제한되어 서버 테스트가 실패해 중단했습니다.
+
+macOS 26.7에서 격리된 설정과 서버 시작, 시스템 오디오 캡처 6회, 신호·일시 정지·무음 및 서버 강제 종료 후 복구를 확인했습니다. 유효한 합성 음성을 저장한 뒤 서버와 helper를 동시에 강제 종료한 실험에서는 재시작 후 실패 상태와 부분 WAV 원본이 표시됐습니다. PCM이 0바이트였던 실험에서는 원본이 없었습니다. 최초 시작이 한 차례 멈춘 사례가 있으며 원인은 확인되지 않았습니다. 시스템 권한 허용·거부 경로, 실제 마이크 녹음 및 실제 Groq 전사·한도 동작은 아직 검증하지 않았습니다. 세 입력의 전사와 결과 저장, 긴 파일, 한도 대기, 재시작, 일시 정지, 정지 및 복구의 실제 사용 흐름은 출시 전 추가 확인이 필요합니다.
+
+`reference/`는 이전 조사와 화면 프로토타입을 보관합니다. 제품 실행 코드는 아닙니다. 결정 사항은 [결정 맵](https://github.com/jongmyeong-jeong/lonta/issues/2)을 참고하세요.
