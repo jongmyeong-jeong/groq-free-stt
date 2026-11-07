@@ -44,10 +44,10 @@ class AppTest(unittest.TestCase):
             self.stop()
         self.temp.cleanup()
 
-    def request(self, method, path, payload=None):
+    def request(self, method, path, payload=None, headers=None):
         data = json.dumps(payload).encode() if payload is not None else None
         req = urllib.request.Request(self.url + path, data=data, method=method,
-                                     headers={'Content-Type': 'application/json'})
+                                     headers=headers or {'Content-Type': 'application/json'})
         try:
             with urllib.request.urlopen(req, timeout=3) as response:
                 body = response.read()
@@ -93,6 +93,30 @@ class AppTest(unittest.TestCase):
         self.assertEqual(stopped['result'], {})
         self.assertTrue(stopped['has_source'])
         self.assertEqual(self.request('POST', '/jobs', payload)[0], 201)
+
+    def test_rejects_cross_origin_and_untrusted_host(self):
+        payload = {'name': 'audio', 'source': ''}
+        self.assertEqual(self.request('POST', '/jobs', payload, {'Origin': 'https://evil.example', 'Content-Type': 'text/plain'})[0], 403)
+        self.assertEqual(self.request('GET', '/jobs', headers={'Host': 'evil.example'})[0], 403)
+        self.assertEqual(self.request('GET', '/jobs', headers={'Origin': self.url})[0], 200)
+        self.assertEqual(self.request('GET', '/jobs')[1], [])
+
+    def test_stopped_job_rejects_late_updates(self):
+        _, job = self.request('POST', '/jobs', {'name': 'audio', 'source': ''})
+        path = '/jobs/' + job['id']
+        self.request('PATCH', path, {'status': 'stopped'})
+        self.assertEqual(self.request('PATCH', path, {'status': 'completed', 'segments': [{'text': 'late'}], 'result': {'txt': 'late'}})[0], 409)
+        _, stopped = self.request('GET', path)
+        self.assertEqual((stopped['status'], stopped['segments'], stopped['result']), ('stopped', [], {}))
+
+    def test_existing_data_directory_is_private(self):
+        self.stop()
+        data = self.home / '.groq-free-stt'
+        data.chmod(0o755)
+        (data / 'jobs.sqlite3').chmod(0o644)
+        self.start()
+        self.assertEqual(data.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((data / 'jobs.sqlite3').stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == '__main__':
