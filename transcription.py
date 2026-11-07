@@ -155,7 +155,7 @@ class GroqClient:
                 except OSError:
                     pass
 
-    def transcribe(self, path):
+    def transcribe(self, path, on_start=None):
         import http.client
         import uuid
         boundary = uuid.uuid4().hex
@@ -179,6 +179,8 @@ class GroqClient:
                     raise RuntimeError('cancelled')
             connection.request('POST', '/openai/v1/audio/transcriptions', body, {
                 'Authorization': f'Bearer {self.key}', 'Content-Type': f'multipart/form-data; boundary={boundary}'})
+            if on_start:
+                on_start()
             response = connection.getresponse()
             data = response.read()
             if response.status != 200:

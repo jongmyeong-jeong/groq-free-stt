@@ -17,7 +17,8 @@ class WorkerQuotaTest(unittest.TestCase):
             cancelled = False
             calls = 0
             def __init__(self, key): pass
-            def transcribe(self, path):
+            def transcribe(self, path, on_start=None):
+                if on_start: on_start()
                 Client.calls += 1
                 raise GroqError(429, {'Retry-After': '3600'})
             def cancel(self): self.cancelled = True
@@ -48,7 +49,8 @@ class WorkerQuotaTest(unittest.TestCase):
         class Client:
             cancelled = False
             def __init__(self, key): pass
-            def transcribe(self, path):
+            def transcribe(self, path, on_start=None):
+                if on_start: on_start()
                 entered.set()
                 release.wait(5)
                 return [{'start': 0, 'end': .5, 'text': 'kept'}]
@@ -84,7 +86,8 @@ class WorkerQuotaTest(unittest.TestCase):
             cancelled = False
             calls = 0
             def __init__(self, key): self.key = key
-            def transcribe(self, path):
+            def transcribe(self, path, on_start=None):
+                if on_start: on_start()
                 Client.calls += 1
                 if self.key == 'old': raise GroqError(401, {})
                 return [{'start': 0, 'end': .5, 'text': 'resumed'}]
@@ -145,3 +148,48 @@ class WorkerQuotaTest(unittest.TestCase):
             self.assertEqual(len(errors), 1)
             with sqlite3.connect(db_path) as db:
                 self.assertEqual(db.execute('SELECT status FROM jobs').fetchone()[0], 'stopped')
+
+    def test_pause_waits_for_admitted_request_to_start(self):
+        import threading
+        entering, allow_start, in_request, release = (threading.Event() for _ in range(4))
+        class Client:
+            cancelled = False
+            def __init__(self, key): pass
+            def transcribe(self, path, on_start=None):
+                entering.set()
+                allow_start.wait(3)
+                on_start()
+                in_request.set()
+                release.wait(3)
+                return [{'start': 0, 'end': .5, 'text': 'kept'}]
+            def cancel(self): self.cancelled = True
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source.wav'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '1', str(source)], check=True)
+            db_path = root / 'jobs.sqlite3'
+            with sqlite3.connect(db_path) as db:
+                db.execute('CREATE TABLE jobs (id TEXT, name TEXT, source BLOB, status TEXT, segments TEXT, result TEXT, source_path TEXT)')
+                db.execute('INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)', ('5', 'audio.wav', source.read_bytes(), 'transcribing', '[]', '{}', None))
+            with patch.object(job_transcription, 'GroqClient', Client):
+                job_transcription.start(db_path, '5', 'test')
+                self.assertTrue(entering.wait(3))
+                paused = threading.Event()
+                def pause():
+                    job_transcription.pause(db_path, '5')
+                    paused.set()
+                thread = threading.Thread(target=pause)
+                thread.start()
+                self.assertFalse(paused.wait(.05))
+                allow_start.set()
+                self.assertTrue(in_request.wait(3))
+                self.assertTrue(paused.wait(3))
+                release.set()
+                thread.join(3)
+                for _ in range(200):
+                    with sqlite3.connect(db_path) as db:
+                        status, result = db.execute('SELECT status, result FROM jobs').fetchone()
+                    if status == 'paused': break
+                    time.sleep(.01)
+                self.assertEqual(status, 'paused')
+                self.assertEqual(json.loads(result)['chunks'][0]['segments'][0]['text'], 'kept')

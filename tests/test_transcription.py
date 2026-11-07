@@ -195,7 +195,8 @@ class JobTest(unittest.TestCase):
             cancelled = False
             def __init__(self, key):
                 pass
-            def transcribe(self, path):
+            def transcribe(self, path, on_start=None):
+                if on_start: on_start()
                 entered.set()
                 release.wait(3)
                 return [{'start': 0, 'end': 1, 'text': 'discarded'}]
@@ -244,7 +245,8 @@ class JobTest(unittest.TestCase):
             cancelled = False
             def __init__(self, key):
                 pass
-            def transcribe(self, path):
+            def transcribe(self, path, on_start=None):
+                if on_start: on_start()
                 return [{'start': 0, 'end': 1, 'text': '반갑습니다'}]
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / 'source.wav'

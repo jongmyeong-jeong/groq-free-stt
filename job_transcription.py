@@ -15,6 +15,7 @@ from quota import (QuotaLedger, RetryPolicy, RequestController, WaitForLimit,
 
 _workers = {}
 _lock = threading.Lock()
+_admission = threading.Lock()
 
 
 def start(db_path, job_id, key, manual=True):
@@ -71,7 +72,7 @@ class PauseRequested(Exception):
 
 
 def pause(db_path, job_id):
-    with _lock, sqlite3.connect(db_path) as db:
+    with _admission, _lock, sqlite3.connect(db_path) as db:
         db.execute('BEGIN IMMEDIATE')
         row = db.execute('SELECT status, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
         if not row or row[0] not in ('transcribing', 'waiting_limit'):
@@ -138,9 +139,22 @@ def _run(db_path, job_id, name, source, source_path, state, client):
         with wave.open(str(path), 'rb') as audio:
             duration = audio.getnframes() / audio.getframerate()
         while True:
-            check_pause()
+            def admit():
+                _admission.acquire()
+                try:
+                    check_pause()
+                except BaseException:
+                    _admission.release()
+                    raise
+                released = False
+                def release():
+                    nonlocal released
+                    if not released:
+                        released = True
+                        _admission.release()
+                return release
             try:
-                result = controller.send(path, duration)
+                result = controller.send(path, duration, admit=admit)
                 with sqlite3.connect(db_path) as db:
                     state.pop('wait_until', None)
                     db.execute("UPDATE jobs SET status = 'transcribing', result = ? WHERE id = ? AND status = 'waiting_limit'", (json.dumps(state), job_id))

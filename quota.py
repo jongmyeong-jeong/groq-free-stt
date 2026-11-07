@@ -150,7 +150,7 @@ class RequestController:
         self.client, self.ledger, self.policy = client, ledger, policy
         self.cancelled = cancelled
 
-    def send(self, path, duration):
+    def send(self, path, duration, admit=None):
         while True:
             if self.cancelled():
                 raise RequestCancelled()
@@ -159,13 +159,23 @@ class RequestController:
                 raise RetryExhausted()
             if action == 'wait':
                 raise WaitForLimit(until)
-            until = self.ledger.reserve(duration)
+            release = admit() if admit else lambda: None
+            try:
+                until = self.ledger.reserve(duration)
+            except BaseException:
+                release()
+                raise
             if until is not None:
+                release()
                 raise WaitForLimit(until)
             if self.cancelled():
+                release()
                 raise RequestCancelled()
             try:
-                result = self.client.transcribe(path)
+                if admit:
+                    result = self.client.transcribe(path, on_start=release)
+                else:
+                    result = self.client.transcribe(path)
             except Exception as error:
                 if self.cancelled():
                     raise RequestCancelled() from error
@@ -187,5 +197,7 @@ class RequestController:
                         raise RetryExhausted() from error
                     continue
                 raise
+            finally:
+                release()
             self.policy.record_success()
             return result
