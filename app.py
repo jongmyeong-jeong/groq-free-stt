@@ -157,6 +157,9 @@ class Handler(BaseHTTPRequestHandler):
                     with connect() as db:
                         row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
                     return self.reply(201, serialize(row))
+                if len(parts) == 3 and self.command == 'POST' and parts[2] == 'heartbeat':
+                    store.heartbeat(parts[1])
+                    return self.reply(200, {'ok': True})
                 if len(parts) == 3 and self.command == 'POST' and parts[2] == 'chunks':
                     store.append(parts[1], body['sequence'], base64.b64decode(body['data'], validate=True), body['elapsed'])
                     return self.reply(200, {'ok': True})
