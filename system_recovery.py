@@ -35,9 +35,7 @@ def recover_recordings(directory):
                 outcome['status'] = 'recording'
                 outcomes.append(outcome)
                 continue
-            if (directory / (recording_id + '.failed')).exists():
-                outcomes.append(outcome)
-                continue
+            capture_failed = (directory / (recording_id + '.failed')).exists()
             temp = None
             try:
                 size = original.stat().st_size
@@ -74,7 +72,7 @@ def recover_recordings(directory):
                                 break
                             if wav.readframes(len(chunk) // 2) != chunk:
                                 raise ValueError('recovered audio differs from original')
-                outcome.update(status='recovered', source=destination.name)
+                outcome.update(status='failed' if capture_failed else 'recovered', source=destination.name)
             except (OSError, ValueError, wave.Error, EOFError, struct.error):
                 pass
             finally:

@@ -71,8 +71,8 @@ class RecoveryTest(unittest.TestCase):
             recording_id = 'f' * 32
             (root / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
             (root / (recording_id + '.failed')).touch()
-            self.assertEqual(recover_recordings(root), [{'id': recording_id, 'status': 'failed', 'source': None}])
-            self.assertFalse((root / (recording_id + '.wav')).exists())
+            self.assertEqual(recover_recordings(root), [{'id': recording_id, 'status': 'failed', 'source': recording_id + '.wav'}])
+            self.assertTrue((root / (recording_id + '.wav')).exists())
 
     def test_invalid_source_is_retained_and_reported(self):
         with tempfile.TemporaryDirectory() as temp:

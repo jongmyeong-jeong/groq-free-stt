@@ -9,6 +9,7 @@ final class Capture {
     let queue = DispatchQueue(label: "stt.capture")
     let file: FileHandle
     let lockFD: Int32
+    let globalLockFD: Int32
     let failedURL: URL
     var tap: AudioObjectID = 0
     var device: AudioObjectID = 0
@@ -21,17 +22,22 @@ final class Capture {
 
     init(path: String) throws {
         let base = URL(fileURLWithPath: path).deletingPathExtension().path
+        let globalPath = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("capture.lock").path
+        let globalFD = open(globalPath, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+        guard globalFD >= 0 else { throw Failure("Cannot open capture lock") }
+        guard flock(globalFD, LOCK_EX | LOCK_NB) == 0 else { close(globalFD); throw Failure("Another recording is active") }
         let fd = open(base + ".lock", O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
-        guard fd >= 0 else { throw Failure("Cannot open recording lock") }
-        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { close(fd); throw Failure("Recording is owned") }
+        guard fd >= 0 else { close(globalFD); throw Failure("Cannot open recording lock") }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { close(fd); close(globalFD); throw Failure("Recording is owned") }
         do {
             let marker = URL(fileURLWithPath: base + ".failed")
             try Data().write(to: marker, options: .atomic)
             guard FileManager.default.createFile(atPath: path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw Failure("Cannot create recording") }
             file = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
             lockFD = fd
+            globalLockFD = globalFD
             failedURL = marker
-        } catch { close(fd); throw error }
+        } catch { close(fd); close(globalFD); throw error }
     }
     struct Failure: Error { let message: String; init(_ message: String) { self.message = message } }
     func check(_ status: OSStatus, _ operation: String) throws {
@@ -136,6 +142,7 @@ final class Capture {
             do { try FileManager.default.removeItem(at: failedURL) } catch { failed = true }
         }
         close(lockFD)
+        close(globalLockFD)
     }
 }
 

@@ -10,6 +10,7 @@ if #available(macOS 14.2, *) {
         while let command = readLine() {
             if command == "stop" { break }
             capture.command(command)
+            if command == "pause" || command == "resume" { print("ack \(command)"); fflush(stdout) }
         }
         capture.finish()
         exit(capture.failed ? 1 : 0)

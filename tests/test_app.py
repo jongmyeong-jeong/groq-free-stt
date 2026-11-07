@@ -188,6 +188,34 @@ class AppTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(base64.b64decode(source['source']).startswith(b'RIFF'))
 
+    def test_failed_system_recording_exposes_valid_partial_source(self):
+        recordings = self.home / '.groq-free-stt' / 'recordings'
+        recordings.mkdir(exist_ok=True)
+        recording_id = 'e' * 32
+        (recordings / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
+        (recordings / (recording_id + '.failed')).touch()
+        item = self.request('GET', '/system-recordings')[1][0]
+        self.assertEqual(item['status'], 'failed')
+        self.assertEqual(item['source'], recording_id + '.wav')
+        status, result = self.request('GET', '/system-recordings/' + recording_id + '/source')
+        self.assertEqual(status, 200)
+        self.assertTrue(base64.b64decode(result['source']).startswith(b'RIFF'))
+
+    def test_delete_system_recording_preserves_other_recordings(self):
+        recordings = self.home / '.groq-free-stt' / 'recordings'
+        recordings.mkdir(exist_ok=True)
+        recording_id, other_id = 'a' * 32, 'b' * 32
+        (recordings / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
+        (recordings / (recording_id + '.failed')).touch()
+        (recordings / (other_id + '.pcm')).write_bytes(b'\x02\x00')
+        self.request('GET', '/system-recordings')
+        self.assertEqual(self.request('DELETE', '/system-recordings/' + recording_id)[0], 200)
+        self.assertFalse((recordings / (recording_id + '.pcm')).exists())
+        self.assertFalse((recordings / (recording_id + '.wav')).exists())
+        self.assertFalse((recordings / (recording_id + '.failed')).exists())
+        self.assertTrue((recordings / (other_id + '.pcm')).exists())
+        self.assertEqual(self.request('DELETE', '/system-recordings/' + recording_id)[0], 404)
+
     def test_only_one_unfinished_job_and_stop_discards_partial_transcript(self):
         payload = {'name': 'audio.wav', 'source': base64.b64encode(b'audio').decode()}
         _, first = self.request('POST', '/jobs', payload)

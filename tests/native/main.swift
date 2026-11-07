@@ -5,6 +5,18 @@ import Darwin
 if #available(macOS 14.2, *) {
     let path = CommandLine.arguments[1]
     let capture = try Capture(path: path)
+    if CommandLine.arguments.count > 2 && CommandLine.arguments[2] == "hold" {
+        print("locked"); fflush(stdout)
+        _ = readLine()
+        capture.finish()
+        exit(0)
+    }
+    do {
+        let duplicate = try Capture(path: path + "-second.pcm")
+        duplicate.finish()
+        fputs("Concurrent capture was allowed\n", stderr)
+        exit(1)
+    } catch { }
     capture.start = mach_absolute_time()
     capture.transitions = [(0, false), (1, true), (48001, false)]
     var info = mach_timebase_info_data_t()
@@ -26,6 +38,7 @@ if #available(macOS 14.2, *) {
     try capture.file.synchronize()
     try capture.file.close()
     close(capture.lockFD)
+    close(capture.globalLockFD)
     let data = try Data(contentsOf: URL(fileURLWithPath: path))
     guard data.count == 48002 * 2,
           Array(data.prefix(4)) == [255, 127, 0, 0],

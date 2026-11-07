@@ -171,11 +171,15 @@ class Handler(BaseHTTPRequestHandler):
                         return self.reply(200, capture.start())
                 if parts[1] in actions:
                     return self.reply(200, actions[parts[1]]())
+            if len(parts) == 2 and parts[0] == 'system-recordings' and self.command == 'DELETE':
+                if capture.delete(parts[1]):
+                    return self.reply(200, {'ok': True})
+                return self.reply(404, {'error': 'Recording not found'})
             if len(parts) == 3 and parts[0] == 'system-recordings' and parts[2] == 'source' and self.command == 'GET':
-                item = next((item for item in capture.recoveries() if item['id'] == parts[1] and item['status'] == 'recovered'), None)
-                if item is None:
+                source = capture.source(parts[1])
+                if source is None:
                     return self.reply(404, {'error': 'Recovered source not found'})
-                return self.reply(200, {'source': base64.b64encode((DATA / 'recordings' / item['source']).read_bytes()).decode()})
+                return self.reply(200, {'source': base64.b64encode(source).decode()})
 
             with connect() as db:
                 if parts == ['jobs'] and self.command == 'POST':
