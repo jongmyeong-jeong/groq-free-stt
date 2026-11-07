@@ -239,6 +239,14 @@ class Handler(BaseHTTPRequestHandler):
                     for key, typ in (('segments', list), ('usage', list), ('result', dict)):
                         if key in body and not isinstance(body[key], typ):
                             raise ValueError()
+                    if body.get('status') == 'paused':
+                        if body != {'status': 'paused'}:
+                            raise ValueError()
+                        try:
+                            job_transcription.pause(DATA / 'jobs.sqlite3', parts[1])
+                        except ValueError as error:
+                            return self.reply(409, {'error': str(error)})
+                        return self.reply(200, serialize(db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (parts[1],)).fetchone()))
                     if body.get('status') == 'stopped':
                         body['segments'] = []
                         body['result'] = {}
@@ -267,6 +275,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     load_env()
     init()
+    job_transcription.recover(DATA / 'jobs.sqlite3', os.environ.get('GROQ_API_KEY'))
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '8765'))), Handler)
     server.recordings = RecordingStore(DATA)
     server.stopping = threading.Event()
