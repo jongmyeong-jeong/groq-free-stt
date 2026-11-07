@@ -102,6 +102,10 @@ class RetryPolicy:
                       'until': None, 'stopped': False}
         self._save()
 
+    def resume_after_stop(self):
+        if self.state['stopped']:
+            self.record_success()
+
     def record_transient(self):
         self.state['consecutive_429'] = 0
         self.state['until'] = None

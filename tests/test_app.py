@@ -20,7 +20,7 @@ class AppTest(unittest.TestCase):
         self.home = Path(self.temp.name)
         (self.home / '.lonta').mkdir()
         (self.home / '.lonta' / 'keep').write_text('untouched')
-        for filename in ('app.py', 'job_transcription.py', 'transcription.py', 'recordings.py'):
+        for filename in ('app.py', 'job_transcription.py', 'transcription.py', 'recordings.py', 'quota.py'):
             shutil.copyfile(ROOT / filename, self.home / filename)
         (self.home / '.env').write_text('GROQ_API_KEY=secret-key\n')
         self.start()
@@ -154,13 +154,13 @@ class AppTest(unittest.TestCase):
         self.assertEqual(status, 201)
         job_id = job['id']
         self.assertEqual(self.request('PATCH', f'/jobs/{job_id}', {
-            'status': 'waiting_limit', 'segments': [{'text': 'hello', 'start': 0}],
+            'status': 'paused', 'segments': [{'text': 'hello', 'start': 0}],
             'usage': [{'seconds': 5}], 'result': {'txt': 'hello', 'md': '# hello'}
         })[0], 200)
         self.stop()
         self.start()
         _, restored = self.request('GET', f'/jobs/{job_id}')
-        self.assertEqual(restored['status'], 'waiting_limit')
+        self.assertEqual(restored['status'], 'paused')
         self.assertEqual(restored['segments'], [{'text': 'hello', 'start': 0}])
         self.assertEqual(restored['usage'], [{'seconds': 5}])
         self.assertEqual(restored['result']['txt'], 'hello')
