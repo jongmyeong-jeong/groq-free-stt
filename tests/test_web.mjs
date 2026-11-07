@@ -64,3 +64,9 @@ test('microphone recovery is checked on the server', async () => {
   assert.equal(sent.path, '/recordings/rec/check');
   assert.equal(sent.options.body, '{}');
 });
+
+test('partial saved transcripts are downloadable without declaring completion', async () => {
+  const { availableDownloads } = await import('../web/app.mjs');
+  assert.deepEqual(availableDownloads({status:'paused', result:{md:'partial', txt:'partial'}}), ['md', 'txt']);
+  assert.deepEqual(availableDownloads({status:'stopped', result:{md:'stale'}}), []);
+});

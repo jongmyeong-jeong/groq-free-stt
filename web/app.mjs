@@ -4,6 +4,7 @@ export const deletionMessage = kind => (kind === 'source' ? '이 전사 항목�
 export const recordingLabel = status => ({recovery_pending:'복구 확인 필요', recovered:'복구됨', recovery_failed:'복구 실패', failed:'복구 실패', finished:'녹음 완료'}[status] || status);
 export const canTranscribeRecording = status => ['recovered', 'finished'].includes(status);
 export const canTranscribeRecovery = item => item.type === 'system' ? typeof item.source === 'string' && ['recovered', 'failed'].includes(item.status) : canTranscribeRecording(item.status);
+export const availableDownloads = job => job.status === 'stopped' ? [] : ['md', 'txt'].filter(format => typeof job.result?.[format] === 'string');
 export const activeJob = jobs => jobs.find(job => ['transcribing', 'paused', 'waiting_limit'].includes(job.status));
 export const statusLabel = status => ({transcribing:'전사 중', paused:'일시 정지', waiting_limit:'한도 대기', completed:'전사 완료', stopped:'정지됨', failed:'실패', recovery_pending:'복구 확인 필요'}[status] || status);
 export async function request(path, options = {}, fetcher = fetch) {
@@ -67,7 +68,7 @@ function start() {
       if (active) main.append(el('p', '진행 중인 전사를 완료하거나 정지한 뒤 새 작업을 시작할 수 있습니다.', 'hint'));
       const section = el('section'); section.append(el('h1', '전사 목록'));
       if (!jobs.length) section.append(el('p', '아직 전사한 항목이 없습니다.', 'hint'));
-      for (const job of jobs) { const row = el('div', null, 'row'); const open = button('', () => { selected = job; render(); }, 'open'); open.append(el('strong', job.name), el('small', statusLabel(job.status))); row.append(open); if (job.status === 'completed') { row.append(link(job, 'md'), link(job, 'txt')); } section.append(row); }
+      for (const job of jobs) { const row = el('div', null, 'row'); const open = button('', () => { selected = job; render(); }, 'open'); open.append(el('strong', job.name), el('small', statusLabel(job.status))); row.append(open); for (const format of availableDownloads(job)) row.append(link(job, format)); section.append(row); }
       main.append(section);
       const recoveries = [...recordings.filter(item => ['recovery_pending','recovered','recovery_failed','finished'].includes(item.status)).map(item => ({...item, type:'mic'})), ...systemRecordings.map(item => ({...item, type:'system'}))];
       if (recoveries.length) { const recovery = el('section', null, 'recovery'); recovery.append(el('h2', '보관된 녹음')); for (const item of recoveries) { const row = el('div', null, 'row'); row.append(el('span', `${item.type === 'mic' ? '마이크' : '시스템 소리'} · ${item.type === 'system' && item.status === 'failed' && item.source ? '녹음 실패 · 부분 원본 복구됨' : recordingLabel(item.status)}`)); if (item.type === 'mic' && item.status === 'recovery_pending') row.append(button('복구 확인', () => run(() => checkMicrophoneRecovery(item.id)))); if (canTranscribeRecovery(item)) { const b = button('전사', () => run(async () => { if (item.type === 'system') { const job = await createSystemJob(item.id); selected = job; await startJob(job.id); } else { const job = await createMicrophoneJob(item.id, '마이크 녹음.webm'); selected = job; await startJob(job.id); } })); b.disabled = !!active || busy; row.append(b); } const remove = button('녹음 삭제', () => confirmAction('이 보관된 녹음 원본을 삭제합니다. 이미 만든 전사 항목은 유지됩니다. 삭제할까요?', () => request(`/${item.type === 'mic' ? 'recordings' : 'system-recordings'}/${encodeURIComponent(item.id)}`, {method:'DELETE'}))); row.append(remove); recovery.append(row); } main.append(recovery); }
@@ -76,7 +77,8 @@ function start() {
       const job = selected, id = encodeURIComponent(job.id);
       main.append(button('← 뒤로 가기', home, 'back'));
       const title = el('h1', job.name); main.append(title, el('p', failedStarts.has(job.id) && job.status === 'transcribing' ? '전사 시작 실패' : statusLabel(job.status), 'hint'));
-      if (job.status === 'completed') { const text = job.result?.text || job.result?.transcript || job.result?.txt; if (text) main.append(el('pre', text)); else main.append(el('p', '다운로드 파일에서 전사 내용을 확인하세요.', 'hint')); const downloads = el('div', null, 'actions'); downloads.append(link(job, 'md'), link(job, 'txt')); main.append(downloads); }
+      if (job.status === 'completed') { const text = job.result?.text || job.result?.transcript || job.result?.txt; if (text) main.append(el('pre', text)); else main.append(el('p', '다운로드 파일에서 전사 내용을 확인하세요.', 'hint')); const downloads = el('div', null, 'actions'); for (const format of availableDownloads(job)) downloads.append(link(job, format)); main.append(downloads); }
+      if (job.status !== 'completed' && availableDownloads(job).length) { main.append(el('p', '부분 전사 결과를 다운로드할 수 있습니다.', 'hint')); const downloads = el('div', null, 'actions'); for (const format of availableDownloads(job)) downloads.append(link(job, format)); main.append(downloads); }
       if (['transcribing','paused','waiting_limit'].includes(job.status)) {
         main.append(el('p', failedStarts.has(job.id) && job.status === 'transcribing' ? '전사를 시작하지 못했습니다. 문제를 해결한 뒤 다시 시작하세요.' : '전사가 백그라운드에서 진행됩니다. 화면을 떠나도 정지되지 않습니다.', 'hint'));
         if (job.status === 'waiting_limit' && Number.isFinite(job.result?.wait_until)) main.append(el('p', `자동 재시도 예정: ${new Date(job.result.wait_until * 1000).toLocaleString()}`, 'hint'));
