@@ -114,10 +114,10 @@ class Handler(BaseHTTPRequestHandler):
                         db.execute('INSERT INTO jobs (id, name, source_path, status, result) VALUES (?, ?, ?, ?, ?)',
                                    (job_id, name, str(path), 'transcribing', json.dumps({'imported_at': datetime.now(timezone.utc).isoformat()})))
                         row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
-                    return self.reply(201, serialize(row))
                 except Exception:
                     path.unlink(missing_ok=True)
                     raise
+                return self.reply(201, serialize(row))
             if length < 0 or length > MAX_REQUEST_BYTES:
                 return self.reply(413, {'error': '파일이 너무 큽니다. 원본은 64 MB 이하여야 합니다.'})
             body = json.loads(self.rfile.read(length)) if length else {}
@@ -206,10 +206,10 @@ class Handler(BaseHTTPRequestHandler):
                                        (job_id, 'system-' + parts[1] + '.wav', str(path), 'transcribing',
                                         json.dumps({'imported_at': datetime.now(timezone.utc).isoformat()})))
                             row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
-                        return self.reply(201, serialize(row))
                     except Exception:
                         path.unlink(missing_ok=True)
                         raise
+                    return self.reply(201, serialize(row))
 
             with connect() as db:
                 if parts == ['jobs'] and self.command == 'POST':
@@ -229,7 +229,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(201, serialize(row))
                 if parts == ['jobs'] and self.command == 'GET':
                     return self.reply(200, [serialize(row) for row in db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs ORDER BY rowid DESC')])
-                if len(parts) not in (2, 3) or parts[0] != 'jobs' or (len(parts) == 3 and parts[2] not in ('source', 'transcribe', 'md', 'txt')):
+                if len(parts) not in (2, 3) or parts[0] != 'jobs' or (len(parts) == 3 and parts[2] not in ('source', 'source-stream', 'transcribe', 'md', 'txt')):
 
                     return self.reply(404, {'error': 'Not found'})
                 row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (parts[1],)).fetchone()
@@ -253,10 +253,41 @@ class Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(data)
                     return
+                if len(parts) == 3 and parts[2] == 'source-stream' and self.command == 'GET':
+                    db.execute('BEGIN')
+                    stored = db.execute('SELECT source_path, length(source) AS size FROM jobs WHERE id = ?', (parts[1],)).fetchone()
+                    if stored['source_path']:
+                        try:
+                            source_file = Path(stored['source_path']).open('rb')
+                        except FileNotFoundError:
+                            return self.reply(404, {'error': 'Source not found'})
+                        with source_file:
+                            self.send_response(200)
+                            self.send_header('Content-Type', 'application/octet-stream')
+                            self.send_header('Content-Length', str(os.fstat(source_file.fileno()).st_size))
+                            self.end_headers()
+                            shutil.copyfileobj(source_file, self.wfile, length=1024 * 1024)
+                        return
+                    if stored['size'] is None:
+                        return self.reply(404, {'error': 'Source not found'})
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/octet-stream')
+                    self.send_header('Content-Length', str(stored['size']))
+                    self.end_headers()
+                    for offset in range(1, stored['size'] + 1, 1024 * 1024):
+                        chunk = db.execute('SELECT substr(source, ?, ?) FROM jobs WHERE id = ?',
+                                           (offset, 1024 * 1024, parts[1])).fetchone()[0]
+                        self.wfile.write(chunk)
+                    return
                 if len(parts) == 3 and parts[2] == 'source':
                     if self.command == 'GET':
-                        stored = db.execute('SELECT source, source_path FROM jobs WHERE id = ?', (parts[1],)).fetchone()
-                        source = stored['source'] if stored['source'] is not None else (Path(stored['source_path']).read_bytes() if stored['source_path'] else None)
+                        stored = db.execute('SELECT source_path, length(source) AS size FROM jobs WHERE id = ?', (parts[1],)).fetchone()
+                        if stored['source_path'] and Path(stored['source_path']).stat().st_size > MAX_SOURCE_BYTES:
+                            return self.reply(413, {'error': 'Use source-stream for large files'})
+                        if stored['size'] is not None and stored['size'] > MAX_SOURCE_BYTES:
+                            return self.reply(413, {'error': 'Use source-stream for large files'})
+                        source = (db.execute('SELECT source FROM jobs WHERE id = ?', (parts[1],)).fetchone()[0]
+                                  if stored['size'] is not None else (Path(stored['source_path']).read_bytes() if stored['source_path'] else None))
                         if source is None:
                             return self.reply(404, {'error': 'Source not found'})
                         return self.reply(200, {'source': base64.b64encode(source).decode()})

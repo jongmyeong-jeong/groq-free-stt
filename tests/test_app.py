@@ -215,6 +215,11 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.request('DELETE', '/system-recordings/' + recording_id)[0], 200)
         self.assertTrue(base64.b64decode(self.request('GET', '/jobs/' + job['id'] + '/source')[1]['source']).startswith(b'RIFF'))
 
+    def test_legacy_job_source_can_be_streamed(self):
+        _, job = self.request('POST', '/jobs', {'name': 'audio', 'source': base64.b64encode(b'old source').decode()})
+        with urllib.request.urlopen(self.url + '/jobs/' + job['id'] + '/source-stream') as response:
+            self.assertEqual(response.read(), b'old source')
+
     def test_large_system_source_streams_and_imports_without_validating_others(self):
         recordings = self.home / '.groq-free-stt' / 'recordings'
         recordings.mkdir(exist_ok=True)
@@ -236,6 +241,15 @@ class AppTest(unittest.TestCase):
         status, job = self.request('POST', '/system-recordings/' + recording_id + '/create-job', {})
         self.assertEqual(status, 201)
         self.assertEqual((self.home / '.groq-free-stt' / 'sources' / job['id']).stat().st_size, total)
+        with urllib.request.urlopen(self.url + '/jobs/' + job['id'] + '/source-stream', timeout=30) as response:
+            streamed = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                streamed += len(chunk)
+        self.assertEqual(streamed, total)
+        self.assertEqual(self.request('GET', '/jobs/' + job['id'] + '/source')[0], 413)
         self.assertFalse((recordings / (other_id + '.wav')).exists())
 
     def test_delete_system_recording_preserves_other_recordings(self):

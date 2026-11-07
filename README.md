@@ -24,7 +24,9 @@ API는 JSON을 사용한다. `POST /jobs`에 `name`과 base64 인코딩한 `sour
 상태는 `transcribing`, `paused`, `waiting_limit`, `completed`, `stopped`다.
 미완료 상태의 작업은 하나만 허용한다. 정지하면 부분 전사와 결과는 지우고
 원본과 사용량은 보존한다. `GET /jobs/{id}/source`는 원본을 base64로 돌려준다.
-`DELETE /jobs/{id}/source`는 원본만, `DELETE /jobs/{id}`는 전체 항목을 지운다.
+`GET /jobs/{id}/source-stream`은 원본을 바이너리로 스트리밍한다. 기존 base64
+조회는 64 MB를 넘는 파일에서 413을 반환한다. `DELETE /jobs/{id}/source`는
+원본만, `DELETE /jobs/{id}`는 전체 항목을 지운다.
 
 긴 업로드는 `POST /uploads`에 `application/octet-stream` 본문과 URL 인코딩한
 `X-Filename` 헤더를 보내면 디스크로 스트리밍한다. 기존 JSON 업로드는 메모리
