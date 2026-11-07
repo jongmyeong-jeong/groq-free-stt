@@ -184,6 +184,12 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.request('POST', f'/recordings/{key}/jobs', {'name': 'live.webm'})[0], 409)
         self.request('POST', f'/recordings/{key}/finish', {'elapsed': 1})
         self.assertEqual(self.request('POST', f'/recordings/{key}/jobs', {'name': 'empty.webm'})[0], 409)
+    def test_recording_heartbeat_requires_an_active_recording(self):
+        _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
+        key = recording['id']
+        self.assertEqual(self.request('POST', f'/recordings/{key}/heartbeat', {})[0], 200)
+        self.request('POST', f'/recordings/{key}/finish', {'elapsed': 1, 'recover': True})
+        self.assertEqual(self.request('POST', f'/recordings/{key}/heartbeat', {})[0], 400)
 
     def test_shutdown_waits_for_recording_finish(self):
         import threading
