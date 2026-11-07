@@ -31,18 +31,23 @@ def connect():
 
 def init():
     DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
+    DATA.chmod(0o700)
+    fd = os.open(DATA / 'jobs.sqlite3', os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
     with connect() as db:
         db.execute('''CREATE TABLE IF NOT EXISTS jobs (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, source BLOB, status TEXT NOT NULL,
             segments TEXT NOT NULL DEFAULT '[]', usage TEXT NOT NULL DEFAULT '[]',
             result TEXT NOT NULL DEFAULT '{}')''')
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active ON jobs ((1)) WHERE status IN ('transcribing', 'paused', 'waiting_limit')")
-    (DATA / 'jobs.sqlite3').chmod(0o600)
 
 
 def serialize(row):
     return {'id': row['id'], 'name': row['name'], 'status': row['status'],
-            'has_source': row['source'] is not None,
+            'has_source': bool(row['has_source']),
             **{key: json.loads(row[key]) for key in ('segments', 'usage', 'result')}}
 
 
@@ -59,6 +64,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def handle_request(self):
+        port = self.server.server_port
+        host = self.headers.get('Host', '')
+        if host not in (f'127.0.0.1:{port}', f'localhost:{port}'):
+            return self.reply(403, {'error': 'Forbidden'})
+        origin = self.headers.get('Origin')
+        if origin is not None and origin != f'http://{host}':
+            return self.reply(403, {'error': 'Forbidden'})
+        if self.command in ('POST', 'PATCH') and self.headers.get_content_type() != 'application/json':
+            return self.reply(403, {'error': 'Forbidden'})
         parts = self.path.strip('/').split('/')
         try:
             length = int(self.headers.get('Content-Length', '0'))
@@ -75,20 +89,21 @@ class Handler(BaseHTTPRequestHandler):
                     db.execute('INSERT INTO jobs (id, name, source, status) VALUES (?, ?, ?, ?)',
                                (job_id, name, source, 'transcribing'))
                     db.commit()
-                    row = db.execute('SELECT * FROM jobs WHERE id = ?', (job_id,)).fetchone()
+                    row = db.execute('SELECT id, name, status, source IS NOT NULL AS has_source, segments, usage, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
                     return self.reply(201, serialize(row))
                 if parts == ['jobs'] and self.command == 'GET':
-                    return self.reply(200, [serialize(row) for row in db.execute('SELECT * FROM jobs ORDER BY rowid DESC')])
+                    return self.reply(200, [serialize(row) for row in db.execute('SELECT id, name, status, source IS NOT NULL AS has_source, segments, usage, result FROM jobs ORDER BY rowid DESC')])
                 if len(parts) not in (2, 3) or parts[0] != 'jobs' or (len(parts) == 3 and parts[2] != 'source'):
                     return self.reply(404, {'error': 'Not found'})
-                row = db.execute('SELECT * FROM jobs WHERE id = ?', (parts[1],)).fetchone()
+                row = db.execute('SELECT id, name, status, source IS NOT NULL AS has_source, segments, usage, result FROM jobs WHERE id = ?', (parts[1],)).fetchone()
                 if row is None:
                     return self.reply(404, {'error': 'Not found'})
                 if len(parts) == 3:
                     if self.command == 'GET':
-                        if row['source'] is None:
+                        source = db.execute('SELECT source FROM jobs WHERE id = ?', (parts[1],)).fetchone()['source']
+                        if source is None:
                             return self.reply(404, {'error': 'Source not found'})
-                        return self.reply(200, {'source': base64.b64encode(row['source']).decode()})
+                        return self.reply(200, {'source': base64.b64encode(source).decode()})
                     if self.command == 'DELETE':
                         db.execute('UPDATE jobs SET source = NULL WHERE id = ?', (parts[1],))
                         db.commit()
@@ -110,11 +125,17 @@ class Handler(BaseHTTPRequestHandler):
                     if body.get('status') == 'stopped':
                         body['segments'] = []
                         body['result'] = {}
-                    for key, value in body.items():
-                        db.execute(f'UPDATE jobs SET {key} = ? WHERE id = ?',
-                                   (value if key == 'status' else json.dumps(value), parts[1]))
+                    if body:
+                        assignments = ', '.join(f'{key} = ?' for key in body)
+                        values = [value if key == 'status' else json.dumps(value) for key, value in body.items()]
+                        updated = db.execute(f"UPDATE jobs SET {assignments} WHERE id = ? AND status != 'stopped'",
+                                             (*values, parts[1]))
+                        if not updated.rowcount:
+                            return self.reply(409, {'error': 'Job is stopped'})
+                    elif row['status'] == 'stopped':
+                        return self.reply(409, {'error': 'Job is stopped'})
                     db.commit()
-                    return self.reply(200, serialize(db.execute('SELECT * FROM jobs WHERE id = ?', (parts[1],)).fetchone()))
+                    return self.reply(200, serialize(db.execute('SELECT id, name, status, source IS NOT NULL AS has_source, segments, usage, result FROM jobs WHERE id = ?', (parts[1],)).fetchone()))
                 return self.reply(405, {'error': 'Method not allowed'})
         except sqlite3.IntegrityError:
             return self.reply(409, {'error': 'An unfinished transcription already exists'})
