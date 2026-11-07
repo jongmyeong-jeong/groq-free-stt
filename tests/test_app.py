@@ -20,7 +20,7 @@ class AppTest(unittest.TestCase):
         self.home = Path(self.temp.name)
         (self.home / '.lonta').mkdir()
         (self.home / '.lonta' / 'keep').write_text('untouched')
-        for module in ('app.py', 'recordings.py', 'system_capture.py', 'system_recovery.py', 'job_transcription.py', 'transcription.py'):
+        for module in ('app.py', 'recordings.py', 'system_capture.py', 'system_recovery.py', 'job_transcription.py', 'transcription.py', 'quota.py'):
             shutil.copyfile(ROOT / module, self.home / module)
         (self.home / '.env').write_text('GROQ_API_KEY=secret-key\n')
         self.start()
@@ -154,13 +154,14 @@ class AppTest(unittest.TestCase):
         self.assertEqual(status, 201)
         job_id = job['id']
         self.assertEqual(self.request('PATCH', f'/jobs/{job_id}', {
-            'status': 'waiting_limit', 'segments': [{'text': 'hello', 'start': 0}],
+            'segments': [{'text': 'hello', 'start': 0}],
             'usage': [{'seconds': 5}], 'result': {'txt': 'hello', 'md': '# hello'}
         })[0], 200)
+        self.assertEqual(self.request('PATCH', f'/jobs/{job_id}', {'status': 'paused'})[0], 200)
         self.stop()
         self.start()
         _, restored = self.request('GET', f'/jobs/{job_id}')
-        self.assertEqual(restored['status'], 'waiting_limit')
+        self.assertEqual(restored['status'], 'paused')
         self.assertEqual(restored['segments'], [{'text': 'hello', 'start': 0}])
         self.assertEqual(restored['usage'], [{'seconds': 5}])
         self.assertEqual(restored['result']['txt'], 'hello')
@@ -251,6 +252,12 @@ class AppTest(unittest.TestCase):
         self.assertFalse((recordings / (recording_id + '.failed')).exists())
         self.assertTrue((recordings / (other_id + '.pcm')).exists())
         self.assertEqual(self.request('DELETE', '/system-recordings/' + recording_id)[0], 404)
+
+    def test_pause_cannot_be_combined_with_data_updates(self):
+        _, job = self.request('POST', '/jobs', {'name': 'audio', 'source': ''})
+        path = '/jobs/' + job['id']
+        self.assertEqual(self.request('PATCH', path, {'status': 'paused', 'result': {}})[0], 400)
+        self.assertEqual(self.request('GET', path)[1]['status'], 'transcribing')
 
     def test_only_one_unfinished_job_and_stop_discards_partial_transcript(self):
         payload = {'name': 'audio.wav', 'source': base64.b64encode(b'audio').decode()}
