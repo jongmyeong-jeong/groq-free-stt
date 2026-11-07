@@ -154,9 +154,10 @@ class AppTest(unittest.TestCase):
         self.assertEqual(status, 201)
         job_id = job['id']
         self.assertEqual(self.request('PATCH', f'/jobs/{job_id}', {
-            'status': 'paused', 'segments': [{'text': 'hello', 'start': 0}],
+            'segments': [{'text': 'hello', 'start': 0}],
             'usage': [{'seconds': 5}], 'result': {'txt': 'hello', 'md': '# hello'}
         })[0], 200)
+        self.assertEqual(self.request('PATCH', f'/jobs/{job_id}', {'status': 'paused'})[0], 200)
         self.stop()
         self.start()
         _, restored = self.request('GET', f'/jobs/{job_id}')
@@ -173,6 +174,12 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.request('DELETE', f'/jobs/{job_id}')[0], 200)
         self.assertEqual(self.request('GET', f'/jobs/{job_id}')[0], 404)
         self.assertEqual((self.home / '.lonta' / 'keep').read_text(), 'untouched')
+
+    def test_pause_cannot_be_combined_with_data_updates(self):
+        _, job = self.request('POST', '/jobs', {'name': 'audio', 'source': ''})
+        path = '/jobs/' + job['id']
+        self.assertEqual(self.request('PATCH', path, {'status': 'paused', 'result': {}})[0], 400)
+        self.assertEqual(self.request('GET', path)[1]['status'], 'transcribing')
 
     def test_only_one_unfinished_job_and_stop_discards_partial_transcript(self):
         payload = {'name': 'audio.wav', 'source': base64.b64encode(b'audio').decode()}

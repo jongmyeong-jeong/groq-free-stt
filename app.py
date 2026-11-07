@@ -222,7 +222,9 @@ class Handler(BaseHTTPRequestHandler):
                     for key, typ in (('segments', list), ('usage', list), ('result', dict)):
                         if key in body and not isinstance(body[key], typ):
                             raise ValueError()
-                    if body == {'status': 'paused'}:
+                    if body.get('status') == 'paused':
+                        if body != {'status': 'paused'}:
+                            raise ValueError()
                         try:
                             job_transcription.pause(DATA / 'jobs.sqlite3', parts[1])
                         except ValueError as error:

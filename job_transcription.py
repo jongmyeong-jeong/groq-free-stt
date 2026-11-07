@@ -72,6 +72,7 @@ class PauseRequested(Exception):
 
 def pause(db_path, job_id):
     with _lock, sqlite3.connect(db_path) as db:
+        db.execute('BEGIN IMMEDIATE')
         row = db.execute('SELECT status, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
         if not row or row[0] not in ('transcribing', 'waiting_limit'):
             raise ValueError('일시 정지할 전사가 없습니다.')
@@ -108,6 +109,7 @@ def _run(db_path, job_id, name, source, source_path, state, client):
     def check_pause():
         paused = False
         with sqlite3.connect(db_path) as db:
+            db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT status, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
             if not row or row[0] == 'stopped' or client.cancelled:
                 raise RequestCancelled()
@@ -121,6 +123,7 @@ def _run(db_path, job_id, name, source, source_path, state, client):
 
     def save(checkpoint):
         with sqlite3.connect(db_path) as db:
+            db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT result FROM jobs WHERE id = ?', (job_id,)).fetchone()
             if row is None:
                 raise RequestCancelled()
@@ -144,6 +147,7 @@ def _run(db_path, job_id, name, source, source_path, state, client):
                 return result
             except WaitForLimit as wait:
                 with sqlite3.connect(db_path) as db:
+                    db.execute('BEGIN IMMEDIATE')
                     row = db.execute('SELECT status, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
                     if not row or row[0] == 'stopped':
                         raise RequestCancelled()

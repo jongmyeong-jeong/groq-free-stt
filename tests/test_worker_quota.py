@@ -116,3 +116,32 @@ class WorkerQuotaTest(unittest.TestCase):
                 self.assertIn('resumed', json.loads(result)['txt'])
                 self.assertEqual(Client.calls, 2)
                 self.assertEqual(len(json.loads((root / 'quota.json').read_text())), 2)
+
+    def test_pause_cannot_revive_a_stop_committed_while_pause_waits_for_database(self):
+        import threading
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / 'jobs.sqlite3'
+            with sqlite3.connect(db_path) as db:
+                db.execute('CREATE TABLE jobs (id TEXT, status TEXT, result TEXT)')
+                db.execute('INSERT INTO jobs VALUES (?, ?, ?)', ('4', 'transcribing', '{}'))
+            blocker = sqlite3.connect(db_path)
+            blocker.execute('BEGIN IMMEDIATE')
+            blocker.execute("UPDATE jobs SET status = 'stopped' WHERE id = '4'")
+            started = threading.Event()
+            errors = []
+            def pause():
+                started.set()
+                try:
+                    job_transcription.pause(db_path, '4')
+                except ValueError as error:
+                    errors.append(error)
+            thread = threading.Thread(target=pause)
+            thread.start()
+            self.assertTrue(started.wait(1))
+            blocker.commit()
+            blocker.close()
+            thread.join(3)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(errors), 1)
+            with sqlite3.connect(db_path) as db:
+                self.assertEqual(db.execute('SELECT status FROM jobs').fetchone()[0], 'stopped')
