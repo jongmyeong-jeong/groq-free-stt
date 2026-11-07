@@ -53,7 +53,17 @@ def audio_duration(source):
         probe = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
                                 '-of', 'default=noprint_wrappers=1:nokey=1', str(source)],
                                capture_output=True, text=True, check=True)
-        duration = float(probe.stdout.strip())
+        try:
+            duration = float(probe.stdout.strip())
+        except ValueError:
+            # MediaRecorder's streamed WebM may omit container duration metadata.
+            # Count decoded audio time with timestamps reset to the sample clock.
+            decoded = subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-i', str(source),
+                                      '-map', '0:a:0', '-af', 'asetpts=N/SR/TB',
+                                      '-f', 'null', '-', '-progress', 'pipe:1'],
+                                     capture_output=True, text=True, check=True)
+            times = re.findall(r'^out_time_us=(\d+)$', decoded.stdout, re.MULTILINE)
+            duration = int(times[-1]) / 1_000_000 if times else 0
         if not 0 < duration < float('inf'):
             raise ValueError()
     except (OSError, subprocess.CalledProcessError, ValueError):

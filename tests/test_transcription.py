@@ -32,6 +32,27 @@ class TranscriptTest(unittest.TestCase):
         self.assertEqual(result[-1]['text'], '내일 만나요')
 
 class AudioTest(unittest.TestCase):
+    def test_streamed_webm_without_container_duration_is_transcribed(self):
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        from transcription import transcribe_file
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'recording.webm'
+            with source.open('wb') as output:
+                subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                                'sine=frequency=440:duration=2', '-c:a', 'libopus',
+                                '-f', 'webm', 'pipe:1'], stdout=output, check=True)
+            received = []
+            def api(path):
+                self.assertGreater(path.stat().st_size, 1000)
+                received.append(path)
+                return [{'start': 0, 'end': 1, 'text': 'hello'}]
+            result = transcribe_file(source, 'recording.webm', 'now', api, lambda state: None)
+            self.assertEqual(len(received), 1)
+            self.assertTrue(result['complete'])
+            self.assertEqual(result['segments'][0]['text'], 'hello')
+
     def test_long_audio_splits_with_overlap_and_limits(self):
         import subprocess
         import tempfile
