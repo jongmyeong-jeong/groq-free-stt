@@ -122,3 +122,66 @@ class RetryPolicy:
         finally:
             if os.path.exists(name):
                 os.unlink(name)
+
+
+class AuthenticationFailed(Exception):
+    pass
+
+
+class WaitForLimit(Exception):
+    def __init__(self, until):
+        self.until = until
+
+
+class RetryExhausted(Exception):
+    pass
+
+
+class RequestCancelled(Exception):
+    pass
+
+
+class RequestController:
+    def __init__(self, client, ledger, policy, cancelled=lambda: False):
+        self.client, self.ledger, self.policy = client, ledger, policy
+        self.cancelled = cancelled
+
+    def send(self, path, duration):
+        while True:
+            if self.cancelled():
+                raise RequestCancelled()
+            action, until = self.policy.current()
+            if action == 'stop':
+                raise RetryExhausted()
+            if action == 'wait':
+                raise WaitForLimit(until)
+            until = self.ledger.reserve(duration)
+            if until is not None:
+                raise WaitForLimit(until)
+            if self.cancelled():
+                raise RequestCancelled()
+            try:
+                result = self.client.transcribe(path)
+            except Exception as error:
+                if self.cancelled():
+                    raise RequestCancelled() from error
+                status = getattr(error, 'status', None)
+                if status == 401:
+                    raise AuthenticationFailed() from error
+                if status == 429:
+                    headers = getattr(error, 'headers', {})
+                    retry_after = next((value for key, value in headers.items()
+                                        if key.lower() == 'retry-after'), None)
+                    action, until = self.policy.record_429(retry_after)
+                    if action == 'stop':
+                        raise RetryExhausted() from error
+                    if action == 'wait':
+                        raise WaitForLimit(until) from error
+                    continue
+                if isinstance(error, (OSError, TimeoutError)) or (status is not None and 500 <= status <= 599):
+                    if self.policy.record_transient()[0] == 'stop':
+                        raise RetryExhausted() from error
+                    continue
+                raise
+            self.policy.record_success()
+            return result
