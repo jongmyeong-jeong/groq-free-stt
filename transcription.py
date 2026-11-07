@@ -93,7 +93,7 @@ def split_audio(source, directory):
 
 
 def transcribe_file(source, name, imported_at, transcribe, checkpoint, cancelled=lambda: False, completed=None,
-                    propagate_errors=False, partial_errors=(), temporary_root=None):
+                    propagate_errors=False, partial_errors=(), partial_exclusions=(), temporary_root=None):
     """Transcribe in order; checkpoint each success; report failures as missing ranges.
 
     `transcribe` is the external API boundary and returns timed segments relative to
@@ -123,7 +123,7 @@ def transcribe_file(source, name, imported_at, transcribe, checkpoint, cancelled
                 if cancelled():
                     return None
                 if propagate_errors:
-                    if not isinstance(error, partial_errors):
+                    if not isinstance(error, partial_errors) or isinstance(error, partial_exclusions):
                         raise
                     partial_error = error
                     missing.append((start, audio_duration(source)))
