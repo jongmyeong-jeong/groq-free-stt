@@ -87,6 +87,16 @@ class RecordingStore:
                        (elapsed, 'finished' if count else 'recovery_failed', recording_id))
         return self.get(recording_id)
 
+    def validate(self, recording_id, playable):
+        if not isinstance(playable, bool):
+            raise ValueError('Invalid validation result')
+        with self._connect() as db:
+            updated = db.execute("UPDATE recordings SET status = ? WHERE id = ? AND status = 'recovery_pending'",
+                                 ('recovered' if playable else 'recovery_failed', recording_id))
+            if not updated.rowcount:
+                raise ValueError('Recording is not awaiting validation')
+        return self.get(recording_id)
+
     def source(self, recording_id):
         self.get(recording_id)
         with self._connect() as db:

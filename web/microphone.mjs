@@ -50,3 +50,51 @@ export class MicrophoneRecording {
     return this.stopping;
   }
 }
+
+// Same-origin transport for app.py. `keepalive` gives page-close requests a chance
+// to complete, but browsers may discard outstanding data during termination.
+export function recordingStorage(fetcher = fetch) {
+  async function request(path, body) {
+    const response = await fetcher(path, body === undefined ? {} : {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body), keepalive: true,
+    });
+    if (!response.ok) throw new Error(`Recording request failed (${response.status})`);
+    return response.json();
+  }
+  return {
+    start: mime_type => request('/recordings', {mime_type}),
+    append: async (id, sequence, blob, elapsed) => {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = '';
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return request(`/recordings/${id}/chunks`, {sequence, data: btoa(binary), elapsed});
+    },
+    finish: (id, elapsed) => request(`/recordings/${id}/finish`, {elapsed}),
+    list: () => request('/recordings'),
+    source: id => request(`/recordings/${id}/source`),
+    validate: (id, playable) => request(`/recordings/${id}/validate`, {playable}),
+  };
+}
+
+// Call for a recovery_pending item before offering it for transcription.
+export async function validateRecoveredRecording(storage, id, audioContext) {
+  const {source} = await storage.source(id);
+  const binary = atob(source);
+  const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+  let playable;
+  try {
+    await audioContext.decodeAudioData(bytes.buffer);
+    playable = true;
+  } catch {
+    playable = false;
+  }
+  return storage.validate(id, playable);
+}
+
+// Page teardown is best effort: already persisted chunks remain recoverable.
+export function stopOnPageHide(recording, target = window) {
+  const listener = () => { recording.stop().catch(() => {}); };
+  target.addEventListener('pagehide', listener, {once: true});
+  return () => target.removeEventListener('pagehide', listener);
+}

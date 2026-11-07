@@ -8,6 +8,8 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from recordings import RecordingStore
+
 ROOT = Path(__file__).resolve().parent
 DATA = Path.home() / '.groq-free-stt'
 ACTIVE = ('transcribing', 'paused', 'waiting_limit')
@@ -79,6 +81,25 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length)) if length else {}
             if not isinstance(body, dict):
                 raise ValueError()
+            if parts[0] == 'recordings':
+                store = self.server.recordings
+                if parts == ['recordings']:
+                    if self.command == 'GET':
+                        return self.reply(200, store.list())
+                    if self.command == 'POST':
+                        return self.reply(201, store.start(body['mime_type']))
+                if len(parts) == 3 and self.command == 'POST' and parts[2] == 'chunks':
+                    store.append(parts[1], body['sequence'], base64.b64decode(body['data'], validate=True), body['elapsed'])
+                    return self.reply(200, {'ok': True})
+                if len(parts) == 3 and self.command == 'POST' and parts[2] == 'finish':
+                    return self.reply(200, store.finish(parts[1], body['elapsed']))
+                if len(parts) == 3 and self.command == 'POST' and parts[2] == 'validate':
+                    return self.reply(200, store.validate(parts[1], body['playable']))
+                if len(parts) == 3 and self.command == 'GET' and parts[2] == 'source':
+                    return self.reply(200, {'source': base64.b64encode(store.source(parts[1])).decode()})
+                if len(parts) == 2 and self.command == 'GET':
+                    return self.reply(200, store.get(parts[1]))
+                return self.reply(404, {'error': 'Not found'})
             with connect() as db:
                 if parts == ['jobs'] and self.command == 'POST':
                     name, encoded = body['name'], body['source']
@@ -149,5 +170,6 @@ if __name__ == '__main__':
     load_env()
     init()
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '8765'))), Handler)
+    server.recordings = RecordingStore(DATA)
     print(f'http://127.0.0.1:{server.server_port}', flush=True)
     server.serve_forever()

@@ -28,6 +28,18 @@ class RecordingStoreTest(unittest.TestCase):
             self.assertEqual(store.get(key)['status'], 'recovery_failed')
             self.assertEqual(store.source(key), b'')
 
+    def test_failed_validation_keeps_source_and_is_not_duplicated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = RecordingStore(Path(temp))
+            key = store.start('audio/webm')['id']
+            store.append(key, 0, b'broken')
+            store = RecordingStore(Path(temp))
+            self.assertEqual(store.validate(key, False)['status'], 'recovery_failed')
+            self.assertEqual(store.source(key), b'broken')
+            restored = RecordingStore(Path(temp))
+            self.assertEqual(len(restored.list()), 1)
+            self.assertEqual(restored.get(key)['status'], 'recovery_failed')
+
     def test_interrupted_recording_is_recovered_once_with_durable_chunks(self):
         with tempfile.TemporaryDirectory() as temp:
             store = RecordingStore(Path(temp))

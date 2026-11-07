@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MicrophoneRecording } from '../web/microphone.mjs';
+import { MicrophoneRecording, validateRecoveredRecording, stopOnPageHide } from '../web/microphone.mjs';
 
 test('pause includes elapsed time and stop persists ordered chunks before finishing', async () => {
   let now = 0;
@@ -47,4 +47,20 @@ test('a failed chunk prevents marking the recording finished', async () => {
   });
   await assert.rejects(recording.stop(), /disk full/);
   assert.equal(finished, false);
+});
+
+
+test('recovery validation records decoding failure without discarding data', async () => {
+  const calls = [];
+  const storage = {source: async () => ({source: btoa('broken')}), validate: async (...args) => calls.push(args)};
+  await validateRecoveredRecording(storage, 'one', {decodeAudioData: async () => { throw new Error('bad media'); }});
+  assert.deepEqual(calls, [['one', false]]);
+});
+
+test('pagehide requests recording stop', async () => {
+  let listener;
+  let stopped = false;
+  stopOnPageHide({stop: async () => { stopped = true; }}, {addEventListener: (name, fn) => { listener = fn; }, removeEventListener: () => {}});
+  listener();
+  assert.equal(stopped, true);
 });

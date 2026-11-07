@@ -21,6 +21,7 @@ class AppTest(unittest.TestCase):
         (self.home / '.lonta').mkdir()
         (self.home / '.lonta' / 'keep').write_text('untouched')
         shutil.copyfile(ROOT / 'app.py', self.home / 'app.py')
+        shutil.copyfile(ROOT / 'recordings.py', self.home / 'recordings.py')
         (self.home / '.env').write_text('GROQ_API_KEY=secret-key\n')
         self.start()
 
@@ -55,6 +56,22 @@ class AppTest(unittest.TestCase):
                 return response.status, json.loads(body)
         except urllib.error.HTTPError as error:
             return error.code, json.loads(error.read())
+
+    def test_recording_chunks_survive_restart_without_creating_a_job(self):
+        status, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
+        self.assertEqual(status, 201)
+        key = recording['id']
+        self.assertEqual(self.request('POST', f'/recordings/{key}/chunks', {
+            'sequence': 0, 'data': base64.b64encode(b'fragment').decode(), 'elapsed': 3
+        })[0], 200)
+        self.stop()
+        self.start()
+        _, recordings = self.request('GET', '/recordings')
+        self.assertEqual(len(recordings), 1)
+        self.assertEqual(recordings[0]['status'], 'recovery_pending')
+        self.assertEqual(recordings[0]['elapsed'], 3)
+        self.assertEqual(self.request('GET', '/jobs')[1], [])
+        self.assertEqual(self.request('GET', f'/recordings/{key}/source')[1]['source'], base64.b64encode(b'fragment').decode())
 
     def test_data_survives_restart_and_source_can_be_deleted_separately(self):
         status, job = self.request('POST', '/jobs', {'name': 'audio.wav', 'source': base64.b64encode(b'audio').decode()})
