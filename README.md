@@ -47,7 +47,8 @@ macOS 14.2 이상에서 `make setup`은 Swift 도구와 코드 서명을 사용�
 기다린다. 일시 정지와 재개는 helper가 명령 처리를 확인한 뒤 성공한다.
 통신이 중단되거나 서버가 종료되면 helper가 종료되며,
 `GET /system-recordings`에서 복구 성공 또는 실패를 조회할 수 있다. 복구된
-녹음의 원본은 `GET /system-recordings/{id}/source`에서 가져올 수 있다.
+녹음의 원본은 `GET /system-recordings/{id}/source`에서 WAV 스트림으로 가져올 수 있다.
+`POST /system-recordings/{id}/create-job`은 원본을 복사하여 전사 작업을 만든다.
 복구는 자동 전사를 시작하지 않고 PCM 원본을 남긴다. helper가 아직 파일을
 쓰는 동안은 복구를 기다리며, 실패한 helper의 유효한 부분 원본은 실패 상태로
 표시하고 사용자가 가져갈 수 있다. 손상된 원본도 보관한다. `make stop`은 서버를

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from system_capture import SystemCapture
@@ -135,6 +136,23 @@ class SystemCaptureTest(unittest.TestCase):
                 self.assertTrue((root / (recording_id + '.pcm')).exists())
             self.assertTrue(capture.delete(recording_id))
             self.assertFalse(capture.delete(recording_id))
+
+    def test_stop_cleans_up_when_failure_marker_cannot_be_written(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            helper = root / 'helper'
+            helper.write_text('#!/usr/bin/env python3\nimport sys\nprint("ready",flush=True)\nfor line in sys.stdin:\n if line.strip()=="stop": break\nsys.exit(1)\n')
+            helper.chmod(0o700)
+            capture = SystemCapture(root, helper)
+            capture.start()
+            self.wait_for(capture, 'recording')
+            process = capture.process
+            with mock.patch.object(Path, 'touch', side_effect=OSError('disk full')):
+                with self.assertRaises(OSError):
+                    capture.stop()
+            self.assertIsNone(capture.process)
+            self.assertTrue(process.stdout.closed)
+            self.assertEqual(capture.status()['status'], 'failed')
 
     def test_helper_failure_is_not_a_successful_recording(self):
         with tempfile.TemporaryDirectory() as temp:

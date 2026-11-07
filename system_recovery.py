@@ -15,12 +15,13 @@ from pathlib import Path
 _RECORDING = re.compile(r'^[0-9a-f]{32}\.pcm$')
 
 
-def recover_recordings(directory):
+def recover_recordings(directory, recording_id=None):
     """Return one outcome per recording; never start a transcription or remove PCM."""
     directory = Path(directory)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     outcomes = []
-    for original in sorted(directory.iterdir()):
+    candidates = [directory / (recording_id + '.pcm')] if recording_id else sorted(directory.iterdir())
+    for original in candidates:
         if not _RECORDING.fullmatch(original.name) or original.is_symlink() or not original.is_file():
             continue
         recording_id = original.stem

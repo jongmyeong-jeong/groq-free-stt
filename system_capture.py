@@ -1,5 +1,6 @@
 """Own the native system-audio helper and expose recovery independently of jobs."""
 import os
+from contextlib import contextmanager
 import fcntl
 import re
 import select
@@ -142,20 +143,32 @@ class SystemCapture:
                         process.wait()
             finally:
                 failed = was_starting or process.returncode != 0
-                if failed:
-                    (self.directory / (self.recording_id + '.failed')).touch(mode=0o600)
-                process.stdout.close()
-                self.process = None
-                self.state = 'failed' if failed else 'idle'
-                if not failed:
-                    self.recording_id = None
+                try:
+                    if failed:
+                        (self.directory / (self.recording_id + '.failed')).touch(mode=0o600)
+                finally:
+                    try:
+                        process.stdout.close()
+                    finally:
+                        self.process = None
+                        self.state = 'failed' if failed else 'idle'
+                        if not failed:
+                            self.recording_id = None
             return self.status()
 
+    @contextmanager
     def source(self, recording_id):
+        if not re.fullmatch(r'[0-9a-f]{32}', recording_id):
+            yield None
+            return
         with self.lock:
-            item = next((item for item in self.recoveries() if item['id'] == recording_id and item['source'] is not None), None)
-            if item is None:
-                return None
+            if self.process is not None and self.recording_id == recording_id:
+                raise RuntimeError('Recording is active')
+            items = recover_recordings(self.directory, recording_id)
+            item = items[0] if items else None
+            if item is None or item['source'] is None:
+                yield None
+                return
             lock_fd = os.open(self.directory / (recording_id + '.lock'), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
             try:
                 try:
@@ -163,11 +176,20 @@ class SystemCapture:
                 except BlockingIOError as error:
                     raise RuntimeError('Recording is active or being recovered') from error
                 try:
-                    return (self.directory / item['source']).read_bytes()
+                    source_fd = os.open(self.directory / item['source'], os.O_RDONLY | os.O_NOFOLLOW)
                 except FileNotFoundError:
-                    return None
-            finally:
+                    source_fd = None
+            except BaseException:
                 os.close(lock_fd)
+                raise
+        try:
+            if source_fd is None:
+                yield None
+            else:
+                with os.fdopen(source_fd, 'rb') as source:
+                    yield source
+        finally:
+            os.close(lock_fd)
 
     def delete(self, recording_id):
         if not re.fullmatch(r'[0-9a-f]{32}', recording_id):

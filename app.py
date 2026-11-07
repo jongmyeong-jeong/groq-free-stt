@@ -4,6 +4,7 @@ import binascii
 import json
 import os
 import signal
+import shutil
 import sqlite3
 import threading
 import time
@@ -176,10 +177,39 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(200, {'ok': True})
                 return self.reply(404, {'error': 'Recording not found'})
             if len(parts) == 3 and parts[0] == 'system-recordings' and parts[2] == 'source' and self.command == 'GET':
-                source = capture.source(parts[1])
-                if source is None:
-                    return self.reply(404, {'error': 'Recovered source not found'})
-                return self.reply(200, {'source': base64.b64encode(source).decode()})
+                with capture.source(parts[1]) as source:
+                    if source is None:
+                        return self.reply(404, {'error': 'Recovered source not found'})
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'audio/wav')
+                    self.send_header('Content-Length', str(os.fstat(source.fileno()).st_size))
+                    self.end_headers()
+                    shutil.copyfileobj(source, self.wfile, length=1024 * 1024)
+                    return
+            if len(parts) == 3 and parts[0] == 'system-recordings' and parts[2] == 'create-job' and self.command == 'POST':
+                with capture.source(parts[1]) as source:
+                    if source is None:
+                        return self.reply(404, {'error': 'Recovered source not found'})
+                    with connect() as db:
+                        if db.execute("SELECT 1 FROM jobs WHERE status IN ('transcribing', 'paused', 'waiting_limit') LIMIT 1").fetchone():
+                            return self.reply(409, {'error': 'An unfinished transcription already exists'})
+                    job_id = uuid.uuid4().hex
+                    directory = DATA / 'sources'
+                    directory.mkdir(mode=0o700, exist_ok=True)
+                    path = directory / job_id
+                    try:
+                        with path.open('xb') as output:
+                            path.chmod(0o600)
+                            shutil.copyfileobj(source, output, length=1024 * 1024)
+                        with connect() as db:
+                            db.execute('INSERT INTO jobs (id, name, source_path, status, result) VALUES (?, ?, ?, ?, ?)',
+                                       (job_id, 'system-' + parts[1] + '.wav', str(path), 'transcribing',
+                                        json.dumps({'imported_at': datetime.now(timezone.utc).isoformat()})))
+                            row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
+                        return self.reply(201, serialize(row))
+                    except Exception:
+                        path.unlink(missing_ok=True)
+                        raise
 
             with connect() as db:
                 if parts == ['jobs'] and self.command == 'POST':
