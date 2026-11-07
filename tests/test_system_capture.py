@@ -53,6 +53,19 @@ class SystemCaptureTest(unittest.TestCase):
                 time.sleep(0.05)
             self.assertEqual(len(list(root.glob('*.eof'))), 1)
 
+    def test_failed_helper_prefix_is_not_reported_as_recovered(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            helper = root / 'helper'
+            helper.write_text('#!/usr/bin/env python3\nimport sys\nf=open(sys.argv[1],"wb"); f.write(b"\\x01\\x00"); f.close()\nprint("ready",flush=True)\nsys.exit(1)\n')
+            helper.chmod(0o700)
+            capture = SystemCapture(root / 'recordings', helper)
+            capture.start()
+            deadline = time.monotonic() + 4
+            while capture.status()['status'] != 'idle' and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(capture.recoveries()[0]['status'], 'failed')
+
     def test_helper_failure_is_not_a_successful_recording(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

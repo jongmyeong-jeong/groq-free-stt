@@ -8,17 +8,30 @@ import Darwin
 final class Capture {
     let queue = DispatchQueue(label: "stt.capture")
     let file: FileHandle
+    let lockFD: Int32
+    let failedURL: URL
     var tap: AudioObjectID = 0
     var device: AudioObjectID = 0
     var io: AudioDeviceIOProcID?
-    var paused = false
-    var start = DispatchTime.now().uptimeNanoseconds
+    var transitions: [(Int64, Bool)] = [(0, false)]
+    var start: UInt64 = 0
+    var started = false
     var framesWritten: Int64 = 0
     var failed = false
 
     init(path: String) throws {
-        guard FileManager.default.createFile(atPath: path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw Failure("Cannot create recording") }
-        file = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        let base = URL(fileURLWithPath: path).deletingPathExtension().path
+        let fd = open(base + ".lock", O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { throw Failure("Cannot open recording lock") }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { close(fd); throw Failure("Recording is owned") }
+        do {
+            let marker = URL(fileURLWithPath: base + ".failed")
+            try Data().write(to: marker, options: .atomic)
+            guard FileManager.default.createFile(atPath: path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw Failure("Cannot create recording") }
+            file = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+            lockFD = fd
+            failedURL = marker
+        } catch { close(fd); throw error }
     }
     struct Failure: Error { let message: String; init(_ message: String) { self.message = message } }
     func check(_ status: OSStatus, _ operation: String) throws {
@@ -48,11 +61,12 @@ final class Capture {
             kAudioAggregateDeviceTapListKey: [[kAudioSubTapUIDKey: description.uuid.uuidString, kAudioSubTapDriftCompensationKey: true]]
         ]
         try check(AudioHardwareCreateAggregateDevice(config as CFDictionary, &device), "Create audio device")
-        try check(AudioDeviceCreateIOProcIDWithBlock(&io, device, queue) { [weak self] _, input, _, _, _ in
-            self?.consume(input)
+        try check(AudioDeviceCreateIOProcIDWithBlock(&io, device, queue) { [weak self] _, input, inputTime, _, _ in
+            self?.consume(input, timestamp: inputTime.pointee)
         }, "Create audio callback")
-        start = DispatchTime.now().uptimeNanoseconds
+        start = mach_absolute_time()
         try check(AudioDeviceStart(device, io), "Start audio capture")
+        started = true
     }
     func pad(to target: Int64) throws {
         var remaining = max(0, target - framesWritten)
@@ -64,25 +78,38 @@ final class Capture {
             remaining -= Int64(n)
         }
     }
-    func elapsedFrames() -> Int64 {
-        Int64((DispatchTime.now().uptimeNanoseconds - start) / 1_000_000) * 48
+    func frames(at hostTime: UInt64) -> Int64 {
+        guard hostTime >= start else { return 0 }
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        let nanoseconds = Double(hostTime - start) * Double(info.numer) / Double(info.denom)
+        return Int64(nanoseconds * 48000 / 1_000_000_000)
     }
-    func consume(_ list: UnsafePointer<AudioBufferList>) {
+    func elapsedFrames() -> Int64 { frames(at: mach_absolute_time()) }
+    func consume(_ list: UnsafePointer<AudioBufferList>, timestamp: AudioTimeStamp) {
+        guard timestamp.mFlags.contains(.hostTimeValid) else {
+            failed = true
+            DispatchQueue.global().async { exit(1) }
+            return
+        }
         guard !failed else { return }
         let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
         guard let buffer = buffers.first, let data = buffer.mData else { return }
         let count = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
         guard count > 0 else { return }
         do {
-            // The callback marks the end of this buffer. Fill any gap before it.
-            let bufferStart = max(0, elapsedFrames() - Int64(count))
+            // The input timestamp is the first frame, independent of callback scheduling.
+            let bufferStart = frames(at: timestamp.mHostTime)
             try pad(to: bufferStart)
             // A pause transition may already have written silence for part of this buffer.
             let skip = min(count, Int(max(0, framesWritten - bufferStart)))
             var output = Data(capacity: (count - skip) * 2)
             let samples = data.assumingMemoryBound(to: Float.self)
+            var transition = 0
             for i in skip..<count {
-                let value = paused || !samples[i].isFinite ? 0 : max(-1, min(1, samples[i]))
+                let frame = bufferStart + Int64(i)
+                while transition + 1 < transitions.count && transitions[transition + 1].0 <= frame { transition += 1 }
+                let value = transitions[transition].1 || !samples[i].isFinite ? 0 : max(-1, min(1, samples[i]))
                 var sample = Int16((value * 32767).rounded()).littleEndian
                 withUnsafeBytes(of: &sample) { output.append(contentsOf: $0) }
             }
@@ -96,30 +123,19 @@ final class Capture {
     }
     func command(_ command: String) {
         queue.sync {
-            do { try pad(to: elapsedFrames()) } catch { failed = true }
-            if command == "pause" { paused = true }
-            if command == "resume" { paused = false }
+            if command == "pause" { transitions.append((elapsedFrames(), true)) }
+            if command == "resume" { transitions.append((elapsedFrames(), false)) }
         }
     }
     func finish() {
         if device != 0, let io = io { AudioDeviceStop(device, io); AudioDeviceDestroyIOProcID(device, io) }
-        queue.sync { do { try pad(to: elapsedFrames()); try file.synchronize(); try file.close() } catch { failed = true } }
+        queue.sync { do { if started { try pad(to: elapsedFrames()) }; try file.synchronize(); try file.close() } catch { failed = true } }
         if device != 0 { AudioHardwareDestroyAggregateDevice(device) }
         if tap != 0 { AudioHardwareDestroyProcessTap(tap) }
+        if started && !failed {
+            do { try FileManager.default.removeItem(at: failedURL) } catch { failed = true }
+        }
+        close(lockFD)
     }
 }
 
-if #available(macOS 14.2, *) {
-    do {
-        guard CommandLine.arguments.count == 2 else { throw Capture.Failure("Missing output path") }
-        let capture = try Capture(path: CommandLine.arguments[1])
-        do { try capture.startCapture() } catch { capture.finish(); throw error }
-        print("ready"); fflush(stdout)
-        while let command = readLine() {
-            if command == "stop" { break }
-            capture.command(command)
-        }
-        capture.finish()
-        exit(capture.failed ? 1 : 0)
-    } catch { fputs("\(error)\n", stderr); exit(1) }
-} else { fputs("macOS 14.2 or later required\n", stderr); exit(1) }

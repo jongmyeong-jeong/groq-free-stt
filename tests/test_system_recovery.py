@@ -1,4 +1,7 @@
 import tempfile
+import fcntl
+import subprocess
+import sys
 import unittest
 import wave
 from pathlib import Path
@@ -32,6 +35,44 @@ class RecoveryTest(unittest.TestCase):
             self.assertEqual(recover_recordings(root), [{'id': 'c' * 32, 'status': 'failed', 'source': None}])
             self.assertTrue(destination.exists())
             self.assertEqual(original.read_bytes(), b'\x01\x00\x02\x00')
+
+    def test_in_use_recording_is_not_recovered_until_owner_releases_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            recording_id = 'e' * 32
+            (root / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
+            with (root / (recording_id + '.lock')).open('w') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertEqual(recover_recordings(root), [{'id': recording_id, 'status': 'recording', 'source': None}])
+                self.assertFalse((root / (recording_id + '.wav')).exists())
+            self.assertEqual(recover_recordings(root)[0]['status'], 'recovered')
+
+    def test_other_process_owns_recording_until_exit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            recording_id = '9' * 32
+            (root / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
+            code = 'import fcntl,sys; f=open(sys.argv[1],"w"); fcntl.flock(f,fcntl.LOCK_EX); print("locked",flush=True); sys.stdin.read()'
+            process = subprocess.Popen([sys.executable, '-c', code, str(root / (recording_id + '.lock'))],
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(process.stdout.readline().strip(), 'locked')
+                self.assertEqual(recover_recordings(root)[0]['status'], 'recording')
+                self.assertFalse((root / (recording_id + '.wav')).exists())
+            finally:
+                process.stdin.close()
+                process.wait(timeout=5)
+                process.stdout.close()
+            self.assertEqual(recover_recordings(root)[0]['status'], 'recovered')
+
+    def test_failed_capture_never_becomes_a_successful_recovery(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            recording_id = 'f' * 32
+            (root / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
+            (root / (recording_id + '.failed')).touch()
+            self.assertEqual(recover_recordings(root), [{'id': recording_id, 'status': 'failed', 'source': None}])
+            self.assertFalse((root / (recording_id + '.wav')).exists())
 
     def test_invalid_source_is_retained_and_reported(self):
         with tempfile.TemporaryDirectory() as temp:

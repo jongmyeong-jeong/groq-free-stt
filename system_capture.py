@@ -44,6 +44,8 @@ class SystemCapture:
                     process.wait()
                 process.stdin.close()
                 process.stdout.close()
+                if (self.directory / (recording_id + '.pcm')).exists():
+                    (self.directory / (recording_id + '.failed')).touch(mode=0o600)
                 raise RuntimeError('System audio capture could not start')
             self.process = process
             self.recording_id = recording_id
@@ -111,6 +113,8 @@ class SystemCapture:
                         process.kill()
                         process.wait()
             finally:
+                if process.returncode != 0:
+                    (self.directory / (self.recording_id + '.failed')).touch(mode=0o600)
                 process.stdout.close()
                 self.process = None
                 self.recording_id = None
