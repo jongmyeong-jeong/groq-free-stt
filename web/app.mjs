@@ -71,10 +71,11 @@ function start() {
       if (job.status === 'completed') { const text = job.result?.text || job.result?.transcript || job.result?.txt; if (text) main.append(el('pre', text)); else main.append(el('p', '다운로드 파일에서 전사 내용을 확인하세요.', 'hint')); const downloads = el('div', null, 'actions'); downloads.append(link(job, 'md'), link(job, 'txt')); main.append(downloads); }
       if (['transcribing','paused','waiting_limit'].includes(job.status)) {
         main.append(el('p', '전사가 백그라운드에서 진행됩니다. 화면을 떠나도 정지되지 않습니다.', 'hint'));
+        if (job.result?.pause_requested) main.append(el('p', '현재 구간을 마친 뒤 일시 정지합니다.', 'hint'));
         if (job.result?.error) main.append(el('p', job.result.error, 'notice'));
         const controls = el('div', null, 'actions');
         if (job.status === 'paused') controls.append(button('계속', () => run(() => request(`/jobs/${id}/transcribe`, json({})) )));
-        else controls.append(button('일시 정지', () => run(() => request(`/jobs/${id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:'paused'})}))));
+        else { const pause = button(job.result?.pause_requested ? '일시 정지 중' : '일시 정지', () => run(() => request(`/jobs/${id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:'paused'})}))); pause.disabled = !!job.result?.pause_requested || busy; controls.append(pause); }
         controls.append(button('정지', () => confirmAction('전사를 정지하면 부분 전사는 삭제되고 원본 음성은 보관됩니다. 정지할까요?', async () => { await request(`/jobs/${id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:'stopped'})}); selected = null; })));
         main.append(controls);
       }
