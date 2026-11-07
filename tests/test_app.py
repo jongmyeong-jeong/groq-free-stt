@@ -57,6 +57,26 @@ class AppTest(unittest.TestCase):
         except urllib.error.HTTPError as error:
             return error.code, json.loads(error.read())
 
+    def test_shutdown_waits_for_recording_finish(self):
+        import threading
+        _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
+        key = recording['id']
+        self.request('POST', f'/recordings/{key}/chunks', {'sequence': 0, 'data': 'YQ==', 'elapsed': 1})
+        result = []
+        thread = threading.Thread(target=lambda: result.append(self.request('POST', '/shutdown', {})))
+        thread.start()
+        for _ in range(50):
+            if self.request('GET', '/recording-control')[1]['stop']:
+                break
+            time.sleep(.02)
+        self.assertTrue(thread.is_alive())
+        self.assertEqual(self.request('POST', f'/recordings/{key}/finish', {'elapsed': 2, 'recover': True})[0], 200)
+        self.assertEqual(self.request('GET', f'/recordings/{key}')[1]['status'], 'recovery_pending')
+        thread.join(3)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result[0][0], 200)
+        self.proc.communicate(timeout=3)
+
     def test_recording_chunks_survive_restart_without_creating_a_job(self):
         status, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
         self.assertEqual(status, 201)

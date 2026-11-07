@@ -29,20 +29,35 @@ export class MicrophoneRecording {
       }
     };
     recorder.start(1000);
+    if (storage.control) {
+      this.monitor = setInterval(async () => {
+        if (this.checking || this.stopping) return;
+        this.checking = true;
+        try {
+          if ((await storage.control()).stop) await this.stop(true);
+        } catch {
+          // Stop capture if the server disappears; committed chunks survive.
+          await this.stop(true).catch(() => {});
+        } finally {
+          this.checking = false;
+        }
+      }, 1000);
+    }
   }
 
   elapsed() { return Math.max(0, (this.clock() - this.started) / 1000); }
   pause() { if (this.recorder.state === 'recording') this.recorder.pause(); }
   resume() { if (this.recorder.state === 'paused') this.recorder.resume(); }
-  stop() {
+  stop(recover = false) {
     if (this.stopping) return this.stopping;
     const elapsed = this.elapsed();
+    clearInterval(this.monitor);
     this.stopping = new Promise((resolve, reject) => {
       this.recorder.onstop = () => {
         this.stream.getTracks().forEach(track => track.stop());
         this.pending.then(() => {
           if (this.error) throw this.error;
-          return this.storage.finish(this.id, elapsed);
+          return this.storage.finish(this.id, elapsed, recover);
         }).then(resolve, reject);
       };
       this.recorder.stop();
@@ -70,7 +85,8 @@ export function recordingStorage(fetcher = fetch) {
       for (const byte of bytes) binary += String.fromCharCode(byte);
       return request(`/recordings/${id}/chunks`, {sequence, data: btoa(binary), elapsed});
     },
-    finish: (id, elapsed) => request(`/recordings/${id}/finish`, {elapsed}),
+    finish: (id, elapsed, recover) => request(`/recordings/${id}/finish`, {elapsed, recover}),
+    control: () => request('/recording-control'),
     list: () => request('/recordings'),
     source: id => request(`/recordings/${id}/source`),
     validate: (id, playable) => request(`/recordings/${id}/validate`, {playable}),
@@ -94,7 +110,7 @@ export async function validateRecoveredRecording(storage, id, audioContext) {
 
 // Page teardown is best effort: already persisted chunks remain recoverable.
 export function stopOnPageHide(recording, target = window) {
-  const listener = () => { recording.stop().catch(() => {}); };
+  const listener = () => { recording.stop(true).catch(() => {}); };
   target.addEventListener('pagehide', listener, {once: true});
   return () => target.removeEventListener('pagehide', listener);
 }

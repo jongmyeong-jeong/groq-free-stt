@@ -72,7 +72,9 @@ class RecordingStore:
             db.execute('INSERT INTO chunks VALUES (?, ?, ?)', (recording_id, sequence, data))
             db.execute('UPDATE recordings SET elapsed = MAX(elapsed, ?) WHERE id = ?', (elapsed, recording_id))
 
-    def finish(self, recording_id, elapsed):
+    def finish(self, recording_id, elapsed, recover=False):
+        if not isinstance(recover, bool):
+            raise ValueError('Invalid recovery flag')
         if not isinstance(elapsed, (int, float)) or isinstance(elapsed, bool) or not 0 <= elapsed < float('inf'):
             raise ValueError('Invalid elapsed time')
         with self._connect() as db:
@@ -84,7 +86,7 @@ class RecordingStore:
                 return self.get(recording_id)
             count = db.execute('SELECT COUNT(*) FROM chunks WHERE recording_id = ?', (recording_id,)).fetchone()[0]
             db.execute('UPDATE recordings SET elapsed = ?, status = ? WHERE id = ?',
-                       (elapsed, 'finished' if count else 'recovery_failed', recording_id))
+                       (elapsed, ('recovery_pending' if recover else 'finished') if count else 'recovery_failed', recording_id))
         return self.get(recording_id)
 
     def validate(self, recording_id, playable):

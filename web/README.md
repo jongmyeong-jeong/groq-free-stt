@@ -17,6 +17,9 @@ when selected. `storage.source(id)` returns the base64 source. The browser decod
 check is not a guarantee that the entire original capture was saved. The chunk
 boundary and browser/server shutdown limits require actual macOS testing.
 
-The server cannot flush audio still held by a browser when it exits. A coordinated
-`make stop` and the UI, including its permission guidance and status display, are
-not implemented yet. These must be connected before claiming issue #15 complete.
+`make stop` requests capture to stop and waits up to ten seconds for active
+recordings to finish before shutting down. The browser polls once per second and
+also stops capture when the server disappears. If it cannot finish in time,
+committed fragments are recovered at the next startup. Neither abrupt shutdown
+nor page teardown guarantees delivery of the last chunk. The UI, permission
+guidance and status display still need to be connected and verified on macOS.
