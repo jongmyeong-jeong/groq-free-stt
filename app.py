@@ -4,6 +4,8 @@ import binascii
 import json
 import os
 import sqlite3
+import threading
+import time
 import uuid
 from urllib.parse import unquote
 from datetime import datetime, timezone
@@ -11,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import job_transcription
+from recordings import RecordingStore
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path.home() / '.groq-free-stt'
@@ -116,6 +119,40 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length)) if length else {}
             if not isinstance(body, dict):
                 raise ValueError()
+            if parts == ['recording-control'] and self.command == 'GET':
+                return self.reply(200, {'stop': self.server.stopping.is_set()})
+            if parts == ['shutdown'] and self.command == 'POST':
+                with self.server.recording_start_lock:
+                    self.server.stopping.set()
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline and any(item['status'] == 'recording' for item in self.server.recordings.list()):
+                    time.sleep(.05)
+                self.reply(200, {'ok': True})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
+            if parts[0] == 'recordings':
+                store = self.server.recordings
+                if parts == ['recordings']:
+                    if self.command == 'GET':
+                        return self.reply(200, store.list())
+                    if self.command == 'POST':
+                        with self.server.recording_start_lock:
+                            if self.server.stopping.is_set():
+                                return self.reply(409, {'error': 'Server is stopping'})
+                            recording = store.start(body['mime_type'])
+                        return self.reply(201, recording)
+                if len(parts) == 3 and self.command == 'POST' and parts[2] == 'chunks':
+                    store.append(parts[1], body['sequence'], base64.b64decode(body['data'], validate=True), body['elapsed'])
+                    return self.reply(200, {'ok': True})
+                if len(parts) == 3 and self.command == 'POST' and parts[2] == 'finish':
+                    return self.reply(200, store.finish(parts[1], body['elapsed'], body.get('recover', False)))
+                if len(parts) == 3 and self.command == 'POST' and parts[2] == 'validate':
+                    return self.reply(200, store.validate(parts[1], body['playable']))
+                if len(parts) == 3 and self.command == 'GET' and parts[2] == 'source':
+                    return self.reply(200, {'source': base64.b64encode(store.source(parts[1])).decode()})
+                if len(parts) == 2 and self.command == 'GET':
+                    return self.reply(200, store.get(parts[1]))
+                return self.reply(404, {'error': 'Not found'})
             with connect() as db:
                 if parts == ['jobs'] and self.command == 'POST':
                     name, encoded = body['name'], body['source']
@@ -218,5 +255,11 @@ if __name__ == '__main__':
     load_env()
     init()
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '8765'))), Handler)
+    server.recordings = RecordingStore(DATA)
+    server.stopping = threading.Event()
+    server.recording_start_lock = threading.Lock()
     print(f'http://127.0.0.1:{server.server_port}', flush=True)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
