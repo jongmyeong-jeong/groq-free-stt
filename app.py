@@ -238,7 +238,7 @@ class Handler(BaseHTTPRequestHandler):
                         with connect() as db:
                             db.execute('INSERT INTO jobs (id, name, source_path, status, result) VALUES (?, ?, ?, ?, ?)',
                                        (job_id, 'system-' + parts[1] + '.wav', str(path), 'transcribing',
-                                        json.dumps({'imported_at': datetime.now(timezone.utc).isoformat()})))
+                                        json.dumps({'recorded_at': capture.recorded_at(parts[1]) or '알 수 없음'})))
                             row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
                     except Exception:
                         path.unlink(missing_ok=True)

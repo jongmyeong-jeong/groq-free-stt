@@ -34,8 +34,10 @@ def timestamp(seconds):
     return f'{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}'
 
 
-def render_transcript(name, imported_at, segments, missing):
+def render_transcript(name, imported_at, segments, missing, recorded_at=None):
     header = f'가져온 시각: {imported_at}\n시간 기준: 파일 시작 이후 경과 시간'
+    if recorded_at is not None:
+        header = f'녹음 시작 시각: {recorded_at}\n시간 기준: 녹음 시작 이후 경과 시간'
     lines = [(s['start'], f"[{timestamp(s['start'])} - {timestamp(s['end'])}] {s['text']}") for s in segments]
     lines += [(start, f'[{timestamp(start)} - {timestamp(end)}] 전사되지 않은 구간') for start, end in missing]
     content = '\n'.join(line for _, line in sorted(lines))
@@ -85,7 +87,10 @@ def split_audio(source, directory):
             raise AudioError('음성 파일을 분할할 수 없습니다.')
         if path.stat().st_size > 20_000_000:
             raise AudioError('분할된 음성 파일의 크기가 제한을 초과했습니다.')
-        yield start, end, path
+        try:
+            yield start, end, path
+        finally:
+            path.unlink(missing_ok=True)
         if end >= duration:
             break
         start = end - 2
@@ -93,13 +98,14 @@ def split_audio(source, directory):
 
 
 def transcribe_file(source, name, imported_at, transcribe, checkpoint, cancelled=lambda: False, completed=None,
-                    propagate_errors=False, partial_errors=(), partial_exclusions=(), temporary_root=None):
+                    propagate_errors=False, partial_errors=(), partial_exclusions=(), temporary_root=None, recorded_at=None):
     """Transcribe in order; checkpoint each success; report failures as missing ranges.
 
     `transcribe` is the external API boundary and returns timed segments relative to
     the chunk. `checkpoint` receives completed chunks and merged segments.
     """
     import tempfile
+    duration = audio_duration(source)
     completed = list(completed or [])
     segments, missing = [], []
     for chunk in completed:
@@ -135,8 +141,10 @@ def transcribe_file(source, name, imported_at, transcribe, checkpoint, cancelled
                 return None
             segments = merge_segments(segments, incoming, start)
             completed.append({'start': start, 'end': end, 'segments': incoming})
-            checkpoint({'chunks': list(completed), 'segments': list(segments)})
-    result = render_transcript(name, imported_at, segments, missing)
+            remaining = [(end, duration)] if end < duration else []
+            checkpoint({'chunks': list(completed), 'segments': list(segments), 'missing': remaining,
+                        'complete': not remaining, **render_transcript(name, imported_at, segments, remaining, recorded_at)})
+    result = render_transcript(name, imported_at, segments, missing, recorded_at)
     if partial_error is not None:
         partial_error.partial_result = {**result, 'complete': False, 'segments': segments, 'missing': missing}
         raise partial_error

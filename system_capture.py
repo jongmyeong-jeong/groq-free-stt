@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from datetime import datetime, timezone
 
 from system_recovery import recover_recordings
 
@@ -59,6 +60,9 @@ class SystemCapture:
                         if self.process is not process:
                             return
                         if line == 'ready' and process.poll() is None:
+                            path = self.directory / (self.recording_id + '.started')
+                            path.write_text(datetime.now(timezone.utc).isoformat())
+                            path.chmod(0o600)
                             self.state = 'recording'
                         else:
                             self.stop()
@@ -156,6 +160,14 @@ class SystemCapture:
                             self.recording_id = None
             return self.status()
 
+    def recorded_at(self, recording_id):
+        if not re.fullmatch(r'[0-9a-f]{32}', recording_id):
+            return None
+        try:
+            return (self.directory / (recording_id + '.started')).read_text()
+        except FileNotFoundError:
+            return None
+
     @contextmanager
     def source(self, recording_id):
         if not re.fullmatch(r'[0-9a-f]{32}', recording_id):
@@ -205,7 +217,7 @@ class SystemCapture:
                     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError as error:
                     raise RuntimeError('Recording is active or being recovered') from error
-                paths = [self.directory / (recording_id + suffix) for suffix in ('.pcm', '.wav', '.failed')]
+                paths = [self.directory / (recording_id + suffix) for suffix in ('.pcm', '.wav', '.failed', '.started')]
                 if not any(path.exists() or path.is_symlink() for path in paths):
                     return False
                 for path in paths:

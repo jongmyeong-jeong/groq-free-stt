@@ -285,9 +285,11 @@ class AppTest(unittest.TestCase):
         recordings.mkdir(exist_ok=True)
         recording_id = 'f' * 32
         (recordings / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
+        (recordings / (recording_id + '.started')).write_text('2026-11-07T01:02:03+00:00')
         status, job = self.request('POST', '/system-recordings/' + recording_id + '/create-job', {})
         self.assertEqual(status, 201)
         self.assertEqual(job['status'], 'transcribing')
+        self.assertEqual(job['result']['recorded_at'], '2026-11-07T01:02:03+00:00')
         self.assertEqual(self.request('POST', '/system-recordings/' + recording_id + '/create-job', {})[0], 409)
         self.assertTrue((recordings / (recording_id + '.pcm')).exists())
         self.assertEqual(self.request('DELETE', '/system-recordings/' + recording_id)[0], 200)

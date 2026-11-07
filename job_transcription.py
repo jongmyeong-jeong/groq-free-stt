@@ -219,7 +219,7 @@ def _run(db_path, job_id, name, source, source_path, state, client):
             result = transcribe_file(path, name, state['imported_at'], send, save,
                                      cancelled=lambda: client.cancelled, completed=state.get('chunks'), propagate_errors=True,
                                      partial_errors=(Exception,), partial_exclusions=(PauseRequested, RequestCancelled),
-                                     temporary_root=temporary_root)
+                                     temporary_root=temporary_root, recorded_at=state.get('recorded_at'))
         if result is not None:
             state.update(result)
             state.pop('wait_until', None)

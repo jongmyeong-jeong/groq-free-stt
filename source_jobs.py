@@ -62,7 +62,7 @@ def from_recording(db_path, recording_path, recording_id, name):
             # Reserve the single active slot before copying potentially large sources.
             imported = datetime.fromtimestamp(row[1], timezone.utc).isoformat()
             db.execute('INSERT INTO jobs (id, name, source_path, status, result) VALUES (?, ?, ?, ?, ?)',
-                       (job_id, name, str(path), 'transcribing', json.dumps({'imported_at': imported})))
+                       (job_id, name, str(path), 'transcribing', json.dumps({'recorded_at': imported})))
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             created = True
             with os.fdopen(fd, 'wb') as output:
@@ -83,8 +83,10 @@ def retry(db_path, old_id):
             row = db.execute('SELECT name, source_path, length(source), status, result FROM jobs WHERE id = ?', (old_id,)).fetchone()
             if not row or row[3] != 'stopped' or (row[1] is None and row[2] is None):
                 raise ValueError('Stopped job source is not available')
+            old_state = json.loads(row[4])
+            metadata = {key: old_state[key] for key in ('imported_at', 'recorded_at') if key in old_state}
             db.execute('INSERT INTO jobs (id, name, source_path, status, result) VALUES (?, ?, ?, ?, ?)',
-                       (job_id, row[0], str(path), 'transcribing', json.dumps({'imported_at': json.loads(row[4]).get('imported_at', datetime.now(timezone.utc).isoformat())})))
+                       (job_id, row[0], str(path), 'transcribing', json.dumps(metadata)))
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             created = True
             with os.fdopen(fd, 'wb') as output:

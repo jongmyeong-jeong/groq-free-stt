@@ -19,6 +19,13 @@ class TranscriptTest(unittest.TestCase):
             self.assertIn('가져온 시각: 2026-11-07T10:00:00+09:00', value)
         self.assertNotIn('#', result['txt'])
 
+    def test_recording_header_uses_recorded_start(self):
+        result = render_transcript('recording', 'import-time', [], [], recorded_at='recorded-time')
+        for value in result.values():
+            self.assertIn('녹음 시작 시각: recorded-time', value)
+            self.assertIn('녹음 시작 이후 경과 시간', value)
+            self.assertNotIn('가져온 시각', value)
+
     def test_partial_overlap_removes_repeated_boundary_words(self):
         previous = [{'start': 896, 'end': 900, 'text': '오늘 날씨가 좋습니다'}]
         result = merge_segments(previous, [{'start': 0, 'end': 4, 'text': '날씨가 좋습니다 내일 만나요'}], 898)
@@ -34,14 +41,48 @@ class AudioTest(unittest.TestCase):
             source = Path(tmp) / 'source.wav'
             subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono',
                             '-t', '605', str(source)], check=True)
-            chunks = list(split_audio(source, Path(tmp)))
+            chunks = []
+            for start, end, path in split_audio(source, Path(tmp)):
+                self.assertLessEqual(path.stat().st_size, 20_000_000)
+                chunks.append((start, end, path))
             self.assertGreater(len(chunks), 1)
             self.assertEqual(chunks[0][0], 0)
             self.assertAlmostEqual(chunks[1][0], chunks[0][1] - 2, places=2)
             self.assertAlmostEqual(chunks[-1][1], 605, places=1)
             for start, end, path in chunks:
                 self.assertLessEqual(end - start, 900)
-                self.assertLessEqual(path.stat().st_size, 20_000_000)
+
+    def test_processed_chunks_are_removed_before_next_request(self):
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        from transcription import transcribe_file
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'source.wav'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono',
+                            '-t', '605', str(source)], check=True)
+            seen = []
+            def api(path):
+                self.assertEqual(list(path.parent.glob('chunk-*.wav')), [path])
+                seen.append(path)
+                return []
+            transcribe_file(source, 'source', 'now', api, lambda state: None)
+            self.assertGreater(len(seen), 1)
+
+    def test_checkpoint_contains_downloadable_partial_transcript(self):
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        from transcription import transcribe_file
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'source.wav'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono',
+                            '-t', '605', str(source)], check=True)
+            checkpoints = []
+            transcribe_file(source, 'source', 'now', lambda path: [{'start': 1, 'end': 2, 'text': 'hello'}], checkpoints.append)
+            self.assertIn('hello', checkpoints[0]['txt'])
+            self.assertIn('[00:10:00 - 00:10:05] 전사되지 않은 구간', checkpoints[0]['md'])
+            self.assertFalse(checkpoints[0]['complete'])
 
     def test_invalid_file_has_readable_error(self):
         import tempfile
@@ -231,6 +272,49 @@ class JobTest(unittest.TestCase):
                         threading.Event().wait(.02)
                     else:
                         self.fail('stopped worker did not exit')
+
+    def test_paused_job_exposes_checkpoint_documents(self):
+        import json
+        import sqlite3
+        import subprocess
+        import tempfile
+        import threading
+        import time
+        from pathlib import Path
+        from unittest.mock import patch
+        import job_transcription
+        entered, release = threading.Event(), threading.Event()
+        class FakeClient:
+            cancelled = False
+            def __init__(self, key): pass
+            def transcribe(self, path, on_start=None):
+                if on_start: on_start()
+                entered.set()
+                release.wait(3)
+                return [{'start': 1, 'end': 2, 'text': 'saved'}]
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / 'source.wav'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono',
+                            '-t', '605', str(audio)], check=True)
+            db_path = Path(tmp) / 'jobs.sqlite3'
+            with sqlite3.connect(db_path) as db:
+                db.execute('CREATE TABLE jobs (id TEXT, name TEXT, source BLOB, status TEXT, segments TEXT, result TEXT, source_path TEXT)')
+                db.execute('INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)', ('1', 'audio.wav', None, 'transcribing', '[]', '{}', str(audio)))
+            with patch.object(job_transcription, 'GroqClient', FakeClient):
+                job_transcription.start(db_path, '1', 'test')
+                self.assertTrue(entered.wait(3))
+                job_transcription.pause(db_path, '1')
+                release.set()
+                for _ in range(150):
+                    with sqlite3.connect(db_path) as db:
+                        status, result = db.execute('SELECT status, result FROM jobs').fetchone()
+                    if status == 'paused': break
+                    time.sleep(.02)
+            self.assertEqual(status, 'paused')
+            result = json.loads(result)
+            self.assertIn('saved', result['txt'])
+            self.assertIn('전사되지 않은 구간', result['md'])
+            self.assertFalse(result['complete'])
 
     def test_worker_saves_completed_result_to_job(self):
         import json

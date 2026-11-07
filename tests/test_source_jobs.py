@@ -53,6 +53,22 @@ class SourceJobsTest(unittest.TestCase):
         self.assertTrue(deleted.is_set())
         self.assertEqual((self.root / 'sources' / created[0]).read_bytes(), b'first')
 
+    def test_recording_start_survives_job_creation_and_retry(self):
+        from datetime import datetime, timezone
+        store = RecordingStore(self.root)
+        recording = store.start('audio/webm')
+        store.append(recording['id'], 0, b'audio')
+        store.finish(recording['id'], 1)
+        job = source_jobs.from_recording(self.db_path, store.path, recording['id'], 'audio.webm')
+        with sqlite3.connect(self.db_path) as db:
+            state = json.loads(db.execute('SELECT result FROM jobs WHERE id = ?', (job,)).fetchone()[0])
+            self.assertEqual(state['recorded_at'], datetime.fromtimestamp(recording['started_at'], timezone.utc).isoformat())
+            db.execute("UPDATE jobs SET status = 'stopped' WHERE id = ?", (job,))
+        retried = source_jobs.retry(self.db_path, job)
+        with sqlite3.connect(self.db_path) as db:
+            state = json.loads(db.execute('SELECT result FROM jobs WHERE id = ?', (retried,)).fetchone()[0])
+            self.assertEqual(state['recorded_at'], datetime.fromtimestamp(recording['started_at'], timezone.utc).isoformat())
+
     def test_retry_and_original_source_deletion_are_serialized(self):
         old = self.root / 'old'
         old.write_bytes(b'retained audio')
