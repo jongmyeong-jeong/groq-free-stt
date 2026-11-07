@@ -3,6 +3,8 @@ import base64
 import binascii
 import json
 import os
+import signal
+import shutil
 import sqlite3
 import threading
 import time
@@ -12,6 +14,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from system_capture import SystemCapture
 import job_transcription
 import source_jobs
 from recordings import RecordingStore
@@ -20,6 +23,7 @@ ROOT = Path(__file__).resolve().parent
 DATA = Path.home() / '.groq-free-stt'
 ACTIVE = ('transcribing', 'paused', 'waiting_limit')
 STATUSES = (*ACTIVE, 'completed', 'stopped')
+capture = SystemCapture(DATA / 'recordings', ROOT / 'build' / 'SystemCapture.app' / 'Contents' / 'MacOS' / 'SystemCapture')
 MAX_SOURCE_BYTES = 64_000_000
 MAX_REQUEST_BYTES = 86_000_000
 
@@ -123,10 +127,10 @@ class Handler(BaseHTTPRequestHandler):
                         db.execute('INSERT INTO jobs (id, name, source_path, status, result) VALUES (?, ?, ?, ?, ?)',
                                    (job_id, name, str(path), 'transcribing', json.dumps({'imported_at': datetime.now(timezone.utc).isoformat()})))
                         row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
-                    return self.reply(201, serialize(row))
                 except Exception:
                     path.unlink(missing_ok=True)
                     raise
+                return self.reply(201, serialize(row))
             if length < 0 or length > MAX_REQUEST_BYTES:
                 return self.reply(413, {'error': '파일이 너무 큽니다. 원본은 64 MB 이하여야 합니다.'})
             body = json.loads(self.rfile.read(length)) if length else {}
@@ -137,6 +141,7 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ['shutdown'] and self.command == 'POST':
                 with self.server.recording_start_lock:
                     self.server.stopping.set()
+                capture.stop()
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and any(item['status'] == 'recording' for item in self.server.recordings.list()):
                     time.sleep(.05)
@@ -184,6 +189,59 @@ class Handler(BaseHTTPRequestHandler):
                     store.delete(parts[1])
                     return self.reply(200, {'ok': True})
                 return self.reply(404, {'error': 'Not found'})
+            if parts == ['system-recordings'] and self.command == 'GET':
+                return self.reply(200, capture.recoveries())
+            if parts == ['system-recording'] and self.command == 'GET':
+                return self.reply(200, capture.status())
+            if len(parts) == 2 and parts[0] == 'system-recording' and self.command == 'POST':
+                actions = {'start': capture.start, 'pause': capture.pause, 'resume': capture.resume,
+                           'stop': capture.stop, 'heartbeat': capture.heartbeat}
+                if parts[1] == 'start':
+                    with self.server.recording_start_lock:
+                        if self.server.stopping.is_set():
+                            return self.reply(409, {'error': 'Server is stopping'})
+                        return self.reply(200, capture.start())
+                if parts[1] in actions:
+                    return self.reply(200, actions[parts[1]]())
+            if len(parts) == 2 and parts[0] == 'system-recordings' and self.command == 'DELETE':
+                if capture.delete(parts[1]):
+                    return self.reply(200, {'ok': True})
+                return self.reply(404, {'error': 'Recording not found'})
+            if len(parts) == 3 and parts[0] == 'system-recordings' and parts[2] == 'source' and self.command == 'GET':
+                with capture.source(parts[1]) as source:
+                    if source is None:
+                        return self.reply(404, {'error': 'Recovered source not found'})
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'audio/wav')
+                    self.send_header('Content-Length', str(os.fstat(source.fileno()).st_size))
+                    self.end_headers()
+                    shutil.copyfileobj(source, self.wfile, length=1024 * 1024)
+                    return
+            if len(parts) == 3 and parts[0] == 'system-recordings' and parts[2] == 'create-job' and self.command == 'POST':
+                with capture.source(parts[1]) as source:
+                    if source is None:
+                        return self.reply(404, {'error': 'Recovered source not found'})
+                    with connect() as db:
+                        if db.execute("SELECT 1 FROM jobs WHERE status IN ('transcribing', 'paused', 'waiting_limit') LIMIT 1").fetchone():
+                            return self.reply(409, {'error': 'An unfinished transcription already exists'})
+                    job_id = uuid.uuid4().hex
+                    directory = DATA / 'sources'
+                    directory.mkdir(mode=0o700, exist_ok=True)
+                    path = directory / job_id
+                    try:
+                        with path.open('xb') as output:
+                            path.chmod(0o600)
+                            shutil.copyfileobj(source, output, length=1024 * 1024)
+                        with connect() as db:
+                            db.execute('INSERT INTO jobs (id, name, source_path, status, result) VALUES (?, ?, ?, ?, ?)',
+                                       (job_id, 'system-' + parts[1] + '.wav', str(path), 'transcribing',
+                                        json.dumps({'imported_at': datetime.now(timezone.utc).isoformat()})))
+                            row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (job_id,)).fetchone()
+                    except Exception:
+                        path.unlink(missing_ok=True)
+                        raise
+                    return self.reply(201, serialize(row))
+
             with connect() as db:
                 if parts == ['jobs'] and self.command == 'POST':
                     name, encoded = body['name'], body['source']
@@ -202,7 +260,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(201, serialize(row))
                 if parts == ['jobs'] and self.command == 'GET':
                     return self.reply(200, [serialize(row) for row in db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs ORDER BY rowid DESC')])
-                if len(parts) not in (2, 3) or parts[0] != 'jobs' or (len(parts) == 3 and parts[2] not in ('source', 'transcribe', 'retry', 'md', 'txt')):
+                if len(parts) not in (2, 3) or parts[0] != 'jobs' or (len(parts) == 3 and parts[2] not in ('source', 'source-stream', 'transcribe', 'retry', 'md', 'txt')):
 
                     return self.reply(404, {'error': 'Not found'})
                 row = db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (parts[1],)).fetchone()
@@ -235,10 +293,41 @@ class Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(data)
                     return
+                if len(parts) == 3 and parts[2] == 'source-stream' and self.command == 'GET':
+                    db.execute('BEGIN')
+                    stored = db.execute('SELECT source_path, length(source) AS size FROM jobs WHERE id = ?', (parts[1],)).fetchone()
+                    if stored['source_path']:
+                        try:
+                            source_file = Path(stored['source_path']).open('rb')
+                        except FileNotFoundError:
+                            return self.reply(404, {'error': 'Source not found'})
+                        with source_file:
+                            self.send_response(200)
+                            self.send_header('Content-Type', 'application/octet-stream')
+                            self.send_header('Content-Length', str(os.fstat(source_file.fileno()).st_size))
+                            self.end_headers()
+                            shutil.copyfileobj(source_file, self.wfile, length=1024 * 1024)
+                        return
+                    if stored['size'] is None:
+                        return self.reply(404, {'error': 'Source not found'})
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/octet-stream')
+                    self.send_header('Content-Length', str(stored['size']))
+                    self.end_headers()
+                    for offset in range(1, stored['size'] + 1, 1024 * 1024):
+                        chunk = db.execute('SELECT substr(source, ?, ?) FROM jobs WHERE id = ?',
+                                           (offset, 1024 * 1024, parts[1])).fetchone()[0]
+                        self.wfile.write(chunk)
+                    return
                 if len(parts) == 3 and parts[2] == 'source':
                     if self.command == 'GET':
-                        stored = db.execute('SELECT source, source_path FROM jobs WHERE id = ?', (parts[1],)).fetchone()
-                        source = stored['source'] if stored['source'] is not None else (Path(stored['source_path']).read_bytes() if stored['source_path'] else None)
+                        stored = db.execute('SELECT source_path, length(source) AS size FROM jobs WHERE id = ?', (parts[1],)).fetchone()
+                        if stored['source_path'] and Path(stored['source_path']).stat().st_size > MAX_SOURCE_BYTES:
+                            return self.reply(413, {'error': 'Use source-stream for large files'})
+                        if stored['size'] is not None and stored['size'] > MAX_SOURCE_BYTES:
+                            return self.reply(413, {'error': 'Use source-stream for large files'})
+                        source = (db.execute('SELECT source FROM jobs WHERE id = ?', (parts[1],)).fetchone()[0]
+                                  if stored['size'] is not None else (Path(stored['source_path']).read_bytes() if stored['source_path'] else None))
                         if source is None:
                             return self.reply(404, {'error': 'Source not found'})
                         return self.reply(200, {'source': base64.b64encode(source).decode()})
@@ -289,6 +378,8 @@ class Handler(BaseHTTPRequestHandler):
                     db.commit()
                     return self.reply(200, serialize(db.execute('SELECT id, name, status, (source IS NOT NULL OR source_path IS NOT NULL) AS has_source, segments, usage, result FROM jobs WHERE id = ?', (parts[1],)).fetchone()))
                 return self.reply(405, {'error': 'Method not allowed'})
+        except RuntimeError as error:
+            return self.reply(409, {'error': str(error)})
         except sqlite3.IntegrityError:
             return self.reply(409, {'error': 'An unfinished transcription already exists'})
         except (ValueError, KeyError, TypeError, binascii.Error, json.JSONDecodeError):
@@ -307,7 +398,13 @@ if __name__ == '__main__':
     server.stopping = threading.Event()
     server.recording_start_lock = threading.Lock()
     print(f'http://127.0.0.1:{server.server_port}', flush=True)
+    def terminate(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, terminate)
     try:
         server.serve_forever()
+    except KeyboardInterrupt:
+        pass
     finally:
+        capture.stop()
         server.server_close()
