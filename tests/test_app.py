@@ -20,7 +20,7 @@ class AppTest(unittest.TestCase):
         self.home = Path(self.temp.name)
         (self.home / '.lonta').mkdir()
         (self.home / '.lonta' / 'keep').write_text('untouched')
-        for filename in ('app.py', 'job_transcription.py', 'transcription.py', 'recordings.py', 'quota.py', 'source_jobs.py'):
+        for filename in ('app.py', 'job_transcription.py', 'transcription.py', 'recordings.py', 'quota.py', 'source_jobs.py', 'system_capture.py', 'system_recovery.py'):
             shutil.copyfile(ROOT / filename, self.home / filename)
         (self.home / '.env').write_text('GROQ_API_KEY=secret-key\n')
         self.start()
@@ -224,6 +224,98 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.request('DELETE', f'/jobs/{job_id}')[0], 200)
         self.assertEqual(self.request('GET', f'/jobs/{job_id}')[0], 404)
         self.assertEqual((self.home / '.lonta' / 'keep').read_text(), 'untouched')
+
+    def test_interrupted_recordings_are_listed_without_creating_jobs(self):
+        recordings = self.home / '.groq-free-stt' / 'recordings'
+        recordings.mkdir(exist_ok=True)
+        recording_id = 'd' * 32
+        (recordings / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
+        status, recovered = self.request('GET', '/system-recordings')
+        self.assertEqual(status, 200)
+        self.assertEqual(recovered, [{'id': recording_id, 'status': 'recovered', 'source': recording_id + '.wav'}])
+        self.assertEqual(self.request('GET', '/jobs')[1], [])
+        self.assertEqual(self.request('GET', '/system-recordings')[1], recovered)
+        with urllib.request.urlopen(self.url + '/system-recordings/' + recording_id + '/source') as response:
+            self.assertEqual(response.headers.get_content_type(), 'audio/wav')
+            self.assertTrue(response.read().startswith(b'RIFF'))
+
+    def test_failed_system_recording_exposes_valid_partial_source(self):
+        recordings = self.home / '.groq-free-stt' / 'recordings'
+        recordings.mkdir(exist_ok=True)
+        recording_id = 'e' * 32
+        (recordings / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
+        (recordings / (recording_id + '.failed')).touch()
+        item = self.request('GET', '/system-recordings')[1][0]
+        self.assertEqual(item['status'], 'failed')
+        self.assertEqual(item['source'], recording_id + '.wav')
+        with urllib.request.urlopen(self.url + '/system-recordings/' + recording_id + '/source') as response:
+            self.assertEqual(response.headers.get_content_type(), 'audio/wav')
+            self.assertTrue(response.read().startswith(b'RIFF'))
+
+    def test_system_recording_can_create_job_without_removing_original(self):
+        recordings = self.home / '.groq-free-stt' / 'recordings'
+        recordings.mkdir(exist_ok=True)
+        recording_id = 'f' * 32
+        (recordings / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
+        status, job = self.request('POST', '/system-recordings/' + recording_id + '/create-job', {})
+        self.assertEqual(status, 201)
+        self.assertEqual(job['status'], 'transcribing')
+        self.assertEqual(self.request('POST', '/system-recordings/' + recording_id + '/create-job', {})[0], 409)
+        self.assertTrue((recordings / (recording_id + '.pcm')).exists())
+        self.assertEqual(self.request('DELETE', '/system-recordings/' + recording_id)[0], 200)
+        self.assertTrue(base64.b64decode(self.request('GET', '/jobs/' + job['id'] + '/source')[1]['source']).startswith(b'RIFF'))
+
+    def test_legacy_job_source_can_be_streamed(self):
+        _, job = self.request('POST', '/jobs', {'name': 'audio', 'source': base64.b64encode(b'old source').decode()})
+        with urllib.request.urlopen(self.url + '/jobs/' + job['id'] + '/source-stream') as response:
+            self.assertEqual(response.read(), b'old source')
+
+    def test_large_system_source_streams_and_imports_without_validating_others(self):
+        recordings = self.home / '.groq-free-stt' / 'recordings'
+        recordings.mkdir(exist_ok=True)
+        recording_id, other_id = 'c' * 32, 'd' * 32
+        size = 65_000_000
+        with (recordings / (recording_id + '.pcm')).open('wb') as source:
+            source.truncate(size)
+        (recordings / (other_id + '.pcm')).write_bytes(b'\x01\x00')
+        total = 0
+        with urllib.request.urlopen(self.url + '/system-recordings/' + recording_id + '/source', timeout=30) as response:
+            self.assertEqual(response.headers.get_content_type(), 'audio/wav')
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+        self.assertEqual(total, size + 44)
+        self.assertFalse((recordings / (other_id + '.wav')).exists())
+        status, job = self.request('POST', '/system-recordings/' + recording_id + '/create-job', {})
+        self.assertEqual(status, 201)
+        self.assertEqual((self.home / '.groq-free-stt' / 'sources' / job['id']).stat().st_size, total)
+        with urllib.request.urlopen(self.url + '/jobs/' + job['id'] + '/source-stream', timeout=30) as response:
+            streamed = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                streamed += len(chunk)
+        self.assertEqual(streamed, total)
+        self.assertEqual(self.request('GET', '/jobs/' + job['id'] + '/source')[0], 413)
+        self.assertFalse((recordings / (other_id + '.wav')).exists())
+
+    def test_delete_system_recording_preserves_other_recordings(self):
+        recordings = self.home / '.groq-free-stt' / 'recordings'
+        recordings.mkdir(exist_ok=True)
+        recording_id, other_id = 'a' * 32, 'b' * 32
+        (recordings / (recording_id + '.pcm')).write_bytes(b'\x01\x00')
+        (recordings / (recording_id + '.failed')).touch()
+        (recordings / (other_id + '.pcm')).write_bytes(b'\x02\x00')
+        self.request('GET', '/system-recordings')
+        self.assertEqual(self.request('DELETE', '/system-recordings/' + recording_id)[0], 200)
+        self.assertFalse((recordings / (recording_id + '.pcm')).exists())
+        self.assertFalse((recordings / (recording_id + '.wav')).exists())
+        self.assertFalse((recordings / (recording_id + '.failed')).exists())
+        self.assertTrue((recordings / (other_id + '.pcm')).exists())
+        self.assertEqual(self.request('DELETE', '/system-recordings/' + recording_id)[0], 404)
 
     def test_pause_cannot_be_combined_with_data_updates(self):
         _, job = self.request('POST', '/jobs', {'name': 'audio', 'source': ''})
