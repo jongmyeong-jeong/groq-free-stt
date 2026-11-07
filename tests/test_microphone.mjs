@@ -144,6 +144,8 @@ test('server shutdown request stops capture and preserves it for recovery', asyn
   let finished;
   const done = new Promise(resolve => { finished = resolve; });
   let trackStopped = false;
+  let stopped;
+  const notified = new Promise(resolve => { stopped = resolve; });
   class Recorder {
     constructor() { this.mimeType = 'audio/webm'; this.state = 'inactive'; }
     start() { this.state = 'recording'; }
@@ -151,10 +153,30 @@ test('server shutdown request stops capture and preserves it for recovery', asyn
   }
   await MicrophoneRecording.start({
     mediaDevices: {getUserMedia: async () => ({getTracks: () => [{stop: () => { trackStopped = true; }}]})},
-    Recorder, clock: () => 5000,
+    Recorder, clock: () => 5000, onServerStop: stopped,
     storage: {start: async () => ({id: 'one'}), append: async () => {},
-      control: async () => ({stop: true}), finish: async (...args) => finished(args)}
+      control: async () => ({stop: true}), finish: async (...args) => { finished(args); return {status: 'recovery_pending'}; }}
   });
   assert.deepEqual(await done, ['one', 0, true]);
   assert.equal(trackStopped, true);
+  assert.deepEqual(await notified, {status: 'recovery_pending'});
+});
+
+test('shutdown finalization failure reports an error instead of a successful stop', async () => {
+  let report;
+  const reported = new Promise(resolve => { report = resolve; });
+  let success = false;
+  class Recorder {
+    constructor() { this.mimeType = 'audio/webm'; this.state = 'inactive'; }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; this.onstop(); }
+  }
+  await MicrophoneRecording.start({
+    mediaDevices: {getUserMedia: async () => ({getTracks: () => []})}, Recorder,
+    onError: report, onServerStop: () => { success = true; },
+    storage: {start: async () => ({id: 'one'}), control: async () => ({stop: true}),
+      finish: async () => { throw new Error('finish failed'); }}
+  });
+  assert.match((await reported).message, /finish failed/);
+  assert.equal(success, false);
 });

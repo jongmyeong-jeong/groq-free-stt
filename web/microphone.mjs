@@ -1,18 +1,18 @@
 // Storage provides start(mimeType), append(id, sequence, Blob, elapsed), and finish(id, seconds).
 export class MicrophoneRecording {
-  static async start({storage, mediaDevices = navigator.mediaDevices, Recorder = MediaRecorder, clock = () => performance.now(), onError = () => {}}) {
+  static async start({storage, mediaDevices = navigator.mediaDevices, Recorder = MediaRecorder, clock = () => performance.now(), onError = () => {}, onServerStop = () => {}}) {
     const stream = await mediaDevices.getUserMedia({audio: true});
     try {
       const recorder = new Recorder(stream);
       const entry = await storage.start(recorder.mimeType || 'audio/webm');
-      return new MicrophoneRecording(stream, recorder, entry.id, storage, clock, onError);
+      return new MicrophoneRecording(stream, recorder, entry.id, storage, clock, onError, onServerStop);
     } catch (error) {
       stream.getTracks().forEach(track => track.stop());
       throw error;
     }
   }
 
-  constructor(stream, recorder, id, storage, clock, onError) {
+  constructor(stream, recorder, id, storage, clock, onError, onServerStop) {
     this.stream = stream;
     this.recorder = recorder;
     this.id = id;
@@ -40,8 +40,15 @@ export class MicrophoneRecording {
         if (this.checking || this.stopping) return;
         this.checking = true;
         try {
-          if ((await storage.control()).stop) await this.stop(true);
-          else if (storage.heartbeat) await storage.heartbeat(id);
+          if ((await storage.control()).stop) {
+            if (this.stopping) return;
+            try {
+              const result = await this.stop(true);
+              onServerStop(result);
+            } catch (error) {
+              if (!this.error) onError(error);
+            }
+          } else if (!this.stopping && storage.heartbeat) await storage.heartbeat(id);
         } catch (error) {
           if (!this.error && !this.stopping) {
             this.error = error;
