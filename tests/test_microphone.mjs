@@ -12,7 +12,7 @@ test('pause includes elapsed time and stop persists ordered chunks before finish
     resume() { this.state = 'recording'; }
     stop() { this.state = 'inactive'; this.ondataavailable({data: new Blob(['last'])}); this.onstop(); }
   }
-  const stream = {getTracks: () => [{stop: () => calls.push('track stopped')}]};
+  const stream = {getAudioTracks: () => [], getTracks: () => [{stop: () => calls.push('track stopped')}]};
   const recorder = await MicrophoneRecording.start({
     mediaDevices: {getUserMedia: async () => stream}, Recorder, clock: () => now,
     storage: {start: async () => ({id: 'one'}), append: async (id, sequence, data) => calls.push([id, sequence, await data.text()]), finish: async (id, elapsed) => calls.push([id, elapsed])}
@@ -22,6 +22,26 @@ test('pause includes elapsed time and stop persists ordered chunks before finish
   now = 7000; recorder.resume();
   now = 10000; await recorder.stop();
   assert.deepEqual(calls, ['track stopped', ['one', 0, 'first'], ['one', 1, 'last'], ['one', 10]]);
+});
+
+test('pausing mutes audio without removing time from the recorded media', async () => {
+  const track = {enabled: true, stop() {}};
+  class Recorder {
+    constructor() { this.mimeType = 'audio/webm'; this.state = 'inactive'; }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; this.onstop(); }
+  }
+  const recording = await MicrophoneRecording.start({
+    mediaDevices: {getUserMedia: async () => ({getTracks: () => [track], getAudioTracks: () => [track]})},
+    Recorder, clock: () => 0,
+    storage: {start: async () => ({id: 'one'}), finish: async () => {}}
+  });
+  recording.pause();
+  assert.equal(track.enabled, false);
+  assert.equal(recording.recorder.state, 'recording');
+  recording.resume();
+  assert.equal(track.enabled, true);
+  await recording.stop();
 });
 
 test('denied permission does not create a recording', async () => {
@@ -49,6 +69,26 @@ test('a failed chunk prevents marking the recording finished', async () => {
   assert.equal(finished, false);
 });
 
+
+test('a failed upload stops the microphone and reports the error immediately', async () => {
+  let stopped = false;
+  let report;
+  const reported = new Promise(resolve => { report = resolve; });
+  class Recorder {
+    constructor() { this.mimeType = 'audio/webm'; this.state = 'inactive'; }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; this.onstop(); }
+  }
+  const recording = await MicrophoneRecording.start({
+    mediaDevices: {getUserMedia: async () => ({getTracks: () => [{stop: () => { stopped = true; }}]})},
+    Recorder, onError: report,
+    storage: {start: async () => ({id: 'one'}), append: async () => { throw new Error('disk full'); }}
+  });
+  recording.recorder.ondataavailable({data: new Blob(['audio'])});
+  assert.match((await reported).message, /disk full/);
+  assert.equal(stopped, true);
+  await assert.rejects(recording.stop(), /disk full/);
+});
 
 test('recovery validation records decoding failure without discarding data', async () => {
   const calls = [];

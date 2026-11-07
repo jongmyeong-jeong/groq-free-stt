@@ -3,13 +3,18 @@
 `MicrophoneRecording.start({storage: recordingStorage()})` requests microphone
 permission and begins one-second MediaRecorder chunks. Its `pause`, `resume`,
 `elapsed` and async `stop` methods control capture. Elapsed time uses a monotonic
-clock and includes pauses. The caller surfaces permission and storage errors and
+clock and includes pauses. Pausing mutes the audio track while recording continues,
+so the recorded media contains silence for the paused interval. The caller passes
+`onError` to surface storage failures, which immediately stop capture, and
 registers `stopOnPageHide(recording)`; page teardown is best effort and pending
 chunks can be lost. A failed write prevents marking a recording finished.
 
 `GET /recordings` returns recordings without creating transcription jobs. On
 server restart interrupted sessions with fragments become `recovery_pending`;
-empty sessions become `recovery_failed`. For each pending item the home UI calls
+empty sessions become `recovery_failed`. A recording whose page vanished without
+finishing also becomes recoverable on a list request after its heartbeat has been
+absent for 120 seconds. The home UI must refresh the list to observe this change.
+For each pending item the home UI calls
 `validateRecoveredRecording(storage, id, audioContext)` to decode the preserved
 source and mark it `recovered` or `recovery_failed`. A failure retains its source.
 The UI should present recovered recordings and only create a transcription job

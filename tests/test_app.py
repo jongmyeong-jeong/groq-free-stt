@@ -113,6 +113,13 @@ class AppTest(unittest.TestCase):
         self.assertEqual(job['status'], 'paused')
         self.assertIn('음성 파일', job['result']['error'])
         self.assertIn('imported_at', job['result'])
+    def test_recording_heartbeat_requires_an_active_recording(self):
+        _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})
+        key = recording['id']
+        self.assertEqual(self.request('POST', f'/recordings/{key}/heartbeat', {})[0], 200)
+        self.request('POST', f'/recordings/{key}/finish', {'elapsed': 1, 'recover': True})
+        self.assertEqual(self.request('POST', f'/recordings/{key}/heartbeat', {})[0], 400)
+
     def test_shutdown_waits_for_recording_finish(self):
         import threading
         _, recording = self.request('POST', '/recordings', {'mime_type': 'audio/webm'})

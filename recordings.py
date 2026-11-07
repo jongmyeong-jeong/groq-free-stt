@@ -6,7 +6,8 @@ from pathlib import Path
 
 
 class RecordingStore:
-    def __init__(self, directory):
+    def __init__(self, directory, clock=time.time):
+        self.clock = clock
         directory = Path(directory)
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.path = directory / 'recordings.sqlite3'
@@ -20,6 +21,9 @@ class RecordingStore:
                     sequence INTEGER NOT NULL, data BLOB NOT NULL,
                     PRIMARY KEY (recording_id, sequence));
             ''')
+            columns = {row[1] for row in db.execute('PRAGMA table_info(recordings)')}
+            if 'last_seen' not in columns:
+                db.execute('ALTER TABLE recordings ADD COLUMN last_seen REAL')
             db.execute("UPDATE recordings SET status = CASE WHEN EXISTS (SELECT 1 FROM chunks WHERE recording_id = recordings.id) THEN 'recovery_pending' ELSE 'recovery_failed' END WHERE status = 'recording'")
         self.path.chmod(0o600)
 
@@ -34,8 +38,8 @@ class RecordingStore:
             raise ValueError('Invalid audio type')
         recording_id = uuid.uuid4().hex
         with self._connect() as db:
-            db.execute('INSERT INTO recordings (id, mime_type, started_at, status) VALUES (?, ?, ?, ?)',
-                       (recording_id, mime_type, time.time(), 'recording'))
+            db.execute('INSERT INTO recordings (id, mime_type, started_at, status, last_seen) VALUES (?, ?, ?, ?, ?)',
+                       (recording_id, mime_type, self.clock(), 'recording', self.clock()))
         return self.get(recording_id)
 
     def get(self, recording_id):
@@ -47,7 +51,15 @@ class RecordingStore:
 
     def list(self):
         with self._connect() as db:
+            db.execute("UPDATE recordings SET status = CASE WHEN EXISTS (SELECT 1 FROM chunks WHERE recording_id = recordings.id) THEN 'recovery_pending' ELSE 'recovery_failed' END WHERE status = 'recording' AND last_seen < ?", (self.clock() - 120,))
             return [dict(row) for row in db.execute('SELECT * FROM recordings ORDER BY started_at DESC')]
+
+    def heartbeat(self, recording_id):
+        with self._connect() as db:
+            updated = db.execute("UPDATE recordings SET last_seen = ? WHERE id = ? AND status = 'recording'",
+                                 (self.clock(), recording_id))
+            if not updated.rowcount:
+                raise ValueError('Recording is closed')
 
     def append(self, recording_id, sequence, data, elapsed=0):
         if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0 or not isinstance(data, bytes) or not data:

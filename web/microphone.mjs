@@ -1,18 +1,18 @@
 // Storage provides start(mimeType), append(id, sequence, Blob, elapsed), and finish(id, seconds).
 export class MicrophoneRecording {
-  static async start({storage, mediaDevices = navigator.mediaDevices, Recorder = MediaRecorder, clock = () => performance.now()}) {
+  static async start({storage, mediaDevices = navigator.mediaDevices, Recorder = MediaRecorder, clock = () => performance.now(), onError = () => {}}) {
     const stream = await mediaDevices.getUserMedia({audio: true});
     try {
       const recorder = new Recorder(stream);
       const entry = await storage.start(recorder.mimeType || 'audio/webm');
-      return new MicrophoneRecording(stream, recorder, entry.id, storage, clock);
+      return new MicrophoneRecording(stream, recorder, entry.id, storage, clock, onError);
     } catch (error) {
       stream.getTracks().forEach(track => track.stop());
       throw error;
     }
   }
 
-  constructor(stream, recorder, id, storage, clock) {
+  constructor(stream, recorder, id, storage, clock, onError) {
     this.stream = stream;
     this.recorder = recorder;
     this.id = id;
@@ -25,7 +25,13 @@ export class MicrophoneRecording {
       if (event.data.size) {
         const sequence = this.sequence++;
         const elapsed = this.elapsed();
-        this.pending = this.pending.then(() => { if (!this.error) return storage.append(id, sequence, event.data, elapsed); }).catch(error => { this.error ||= error; });
+        this.pending = this.pending.then(() => { if (!this.error) return storage.append(id, sequence, event.data, elapsed); }).catch(error => {
+          if (!this.error) {
+            this.error = error;
+            this.stop(true).catch(() => {});
+            onError(error);
+          }
+        });
       }
     };
     recorder.start(1000);
@@ -35,6 +41,7 @@ export class MicrophoneRecording {
         this.checking = true;
         try {
           if ((await storage.control()).stop) await this.stop(true);
+          else if (storage.heartbeat) await storage.heartbeat(id);
         } catch {
           // Stop capture if the server disappears; committed chunks survive.
           await this.stop(true).catch(() => {});
@@ -46,8 +53,8 @@ export class MicrophoneRecording {
   }
 
   elapsed() { return Math.max(0, (this.clock() - this.started) / 1000); }
-  pause() { if (this.recorder.state === 'recording') this.recorder.pause(); }
-  resume() { if (this.recorder.state === 'paused') this.recorder.resume(); }
+  pause() { if (!this.stopping) this.stream.getAudioTracks().forEach(track => { track.enabled = false; }); }
+  resume() { if (!this.stopping) this.stream.getAudioTracks().forEach(track => { track.enabled = true; }); }
   stop(recover = false) {
     if (this.stopping) return this.stopping;
     const elapsed = this.elapsed();
@@ -87,6 +94,7 @@ export function recordingStorage(fetcher = fetch) {
     },
     finish: (id, elapsed, recover) => request(`/recordings/${id}/finish`, {elapsed, recover}),
     control: () => request('/recording-control'),
+    heartbeat: id => request(`/recordings/${id}/heartbeat`, {}),
     list: () => request('/recordings'),
     source: id => request(`/recordings/${id}/source`),
     validate: (id, playable) => request(`/recordings/${id}/validate`, {playable}),

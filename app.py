@@ -141,6 +141,9 @@ class Handler(BaseHTTPRequestHandler):
                                 return self.reply(409, {'error': 'Server is stopping'})
                             recording = store.start(body['mime_type'])
                         return self.reply(201, recording)
+                if len(parts) == 3 and self.command == 'POST' and parts[2] == 'heartbeat':
+                    store.heartbeat(parts[1])
+                    return self.reply(200, {'ok': True})
                 if len(parts) == 3 and self.command == 'POST' and parts[2] == 'chunks':
                     store.append(parts[1], body['sequence'], base64.b64decode(body['data'], validate=True), body['elapsed'])
                     return self.reply(200, {'ok': True})

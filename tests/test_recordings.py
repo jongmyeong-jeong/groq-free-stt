@@ -6,6 +6,22 @@ from recordings import RecordingStore
 
 
 class RecordingStoreTest(unittest.TestCase):
+    def test_abandoned_recording_becomes_recoverable_without_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            now = [100.0]
+            store = RecordingStore(Path(temp), clock=lambda: now[0])
+            key = store.start('audio/webm')['id']
+            store.append(key, 0, b'first', 1)
+            now[0] += 60
+            store.heartbeat(key)
+            now[0] += 60
+            self.assertEqual(store.list()[0]['status'], 'recording')
+            now[0] += 61
+            self.assertEqual(store.list()[0]['status'], 'recovery_pending')
+            self.assertEqual(store.source(key), b'first')
+            with self.assertRaises(ValueError):
+                store.heartbeat(key)
+
     def test_finish_keeps_elapsed_time_and_rejects_late_or_conflicting_chunks(self):
         with tempfile.TemporaryDirectory() as temp:
             store = RecordingStore(Path(temp))
