@@ -5,6 +5,7 @@ export const recordingLabel = status => ({recovery_pending:'복구 확인 필요
 export const canTranscribeRecording = status => ['recovered', 'finished'].includes(status);
 export const canTranscribeRecovery = item => item.type === 'system' ? typeof item.source === 'string' && ['recovered', 'failed'].includes(item.status) : canTranscribeRecording(item.status);
 export const availableDownloads = job => job.status === 'stopped' ? [] : ['md', 'txt'].filter(format => typeof job.result?.[format] === 'string');
+export const failureNotice = error => `${error.message} 처리 결과를 전사 목록에서 확인하세요.`;
 export const activeJob = jobs => jobs.find(job => ['transcribing', 'paused', 'waiting_limit'].includes(job.status));
 export const statusLabel = status => ({transcribing:'전사 중', paused:'일시 정지', waiting_limit:'한도 대기', completed:'전사 완료', stopped:'정지됨', failed:'실패', recovery_pending:'복구 확인 필요'}[status] || status);
 export async function request(path, options = {}, fetcher = fetch) {
@@ -31,7 +32,7 @@ function start() {
   const button = (text, action, cls) => { const node = el('button', text, cls); node.type = 'button'; node.onclick = action; return node; };
   const failedStarts = new Set(JSON.parse(sessionStorage.getItem('failed-transcription-starts') || '[]'));
   const json = body => ({method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  async function run(action) { if (busy) return; busy = true; notice = ''; render(); try { await action(); await refresh(); } catch (error) { notice = error.message; } finally { busy = false; render(); } }
+  async function run(action) { if (busy) return; const knownIds = new Set(jobs.map(job => job.id)); busy = true; notice = ''; render(); try { await action(); await refresh(); } catch (error) { notice = failureNotice(error); try { await refresh(); const created = jobs.find(job => !knownIds.has(job.id) && job.status === 'transcribing'); if (created) { selected = created; failedStarts.add(created.id); sessionStorage.setItem('failed-transcription-starts', JSON.stringify([...failedStarts])); } } catch {} } finally { busy = false; render(); } }
   async function startJob(id) { try { await request(`/jobs/${encodeURIComponent(id)}/transcribe`, json({})); failedStarts.delete(id); } catch (error) { failedStarts.add(id); throw error; } finally { sessionStorage.setItem('failed-transcription-starts', JSON.stringify([...failedStarts])); } }
   async function refresh() { jobs = await request('/jobs'); recordings = await recordingStorage().list(); if (!systemRecording) systemRecordings = await request('/system-recordings').catch(() => []); if (selected) selected = jobs.find(job => job.id === selected.id) || null; }
   function home() { selected = null; render(); }

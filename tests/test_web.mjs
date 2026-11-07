@@ -70,3 +70,9 @@ test('partial saved transcripts are downloadable without declaring completion', 
   assert.deepEqual(availableDownloads({status:'paused', result:{md:'partial', txt:'partial'}}), ['md', 'txt']);
   assert.deepEqual(availableDownloads({status:'stopped', result:{md:'stale'}}), []);
 });
+
+test('ambiguous request failure directs user to the refreshed job list', async () => {
+  const { failureNotice } = await import('../web/app.mjs');
+  assert.match(failureNotice(new Error('연결 실패')), /연결 실패/);
+  assert.match(failureNotice(new Error('연결 실패')), /목록/);
+});
