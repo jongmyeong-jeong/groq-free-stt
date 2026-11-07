@@ -293,3 +293,38 @@ class WorkerQuotaTest(unittest.TestCase):
                     self.assertIn('전사되지 않은 구간', result[kind])
                 self.assertFalse(result['complete'])
                 self.assertEqual(Client.calls, 4)
+
+    def test_unexpected_http_error_preserves_partial_transcript(self):
+        class Client:
+            cancelled = False
+            calls = 0
+            def __init__(self, key): pass
+            def transcribe(self, path, on_start=None):
+                if on_start: on_start()
+                Client.calls += 1
+                if Client.calls == 1:
+                    return [{'start': 1, 'end': 2, 'text': '앞 구간'}]
+                raise GroqError(400, {})
+            def cancel(self): self.cancelled = True
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source.wav'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '605', str(source)], check=True)
+            db_path = root / 'jobs.sqlite3'
+            with sqlite3.connect(db_path) as db:
+                db.execute('CREATE TABLE jobs (id TEXT, name TEXT, source BLOB, status TEXT, segments TEXT, result TEXT, source_path TEXT)')
+                db.execute('INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)', ('8', 'audio.wav', source.read_bytes(), 'transcribing', '[]', '{}', None))
+            with patch.object(job_transcription, 'GroqClient', Client):
+                job_transcription.start(db_path, '8', 'test')
+                for _ in range(300):
+                    with sqlite3.connect(db_path) as db:
+                        status, result = db.execute('SELECT status, result FROM jobs').fetchone()
+                    if status == 'paused': break
+                    time.sleep(.01)
+                result = json.loads(result)
+                self.assertEqual(status, 'paused')
+                for kind in ('md', 'txt'):
+                    self.assertIn('앞 구간', result[kind])
+                    self.assertIn('전사되지 않은 구간', result[kind])
+                self.assertFalse(result['complete'])
+                self.assertEqual(Client.calls, 2)

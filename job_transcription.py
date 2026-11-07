@@ -210,7 +210,8 @@ def _run(db_path, job_id, name, source, source_path, state, client):
                 path.write_bytes(source)
             result = transcribe_file(path, name, state['imported_at'], send, save,
                                      cancelled=lambda: client.cancelled, completed=state.get('chunks'), propagate_errors=True,
-                                     partial_errors=(AuthenticationFailed, RetryExhausted), temporary_root=temporary_root)
+                                     partial_errors=(Exception,), partial_exclusions=(PauseRequested, RequestCancelled),
+                                     temporary_root=temporary_root)
         if result is not None:
             state.update(result)
             state.pop('wait_until', None)
@@ -227,7 +228,8 @@ def _run(db_path, job_id, name, source, source_path, state, client):
             state['error_code'] = 'authentication'
         with sqlite3.connect(db_path) as db:
             db.execute("UPDATE jobs SET status = 'paused', result = ? WHERE id = ? AND status != 'stopped'", (json.dumps(state), job_id))
-    except Exception:
+    except Exception as error:
+        state.update(getattr(error, 'partial_result', {}))
         state['error'] = '전사 중 오류가 발생했습니다.'
         with sqlite3.connect(db_path) as db:
             db.execute("UPDATE jobs SET status = 'paused', result = ? WHERE id = ? AND status != 'stopped'", (json.dumps(state), job_id))
