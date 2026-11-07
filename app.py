@@ -89,7 +89,8 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ['recording-control'] and self.command == 'GET':
                 return self.reply(200, {'stop': self.server.stopping.is_set()})
             if parts == ['shutdown'] and self.command == 'POST':
-                self.server.stopping.set()
+                with self.server.recording_start_lock:
+                    self.server.stopping.set()
                 capture.stop()
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and any(item['status'] == 'recording' for item in self.server.recordings.list()):
@@ -103,9 +104,11 @@ class Handler(BaseHTTPRequestHandler):
                     if self.command == 'GET':
                         return self.reply(200, store.list())
                     if self.command == 'POST':
-                        if self.server.stopping.is_set():
-                            return self.reply(409, {'error': 'Server is stopping'})
-                        return self.reply(201, store.start(body['mime_type']))
+                        with self.server.recording_start_lock:
+                            if self.server.stopping.is_set():
+                                return self.reply(409, {'error': 'Server is stopping'})
+                            recording = store.start(body['mime_type'])
+                        return self.reply(201, recording)
                 if len(parts) == 3 and self.command == 'POST' and parts[2] == 'chunks':
                     store.append(parts[1], body['sequence'], base64.b64decode(body['data'], validate=True), body['elapsed'])
                     return self.reply(200, {'ok': True})
@@ -125,8 +128,11 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 2 and parts[0] == 'system-recording' and self.command == 'POST':
                 actions = {'start': capture.start, 'pause': capture.pause, 'resume': capture.resume,
                            'stop': capture.stop, 'heartbeat': capture.heartbeat}
-                if parts[1] == 'start' and self.server.stopping.is_set():
-                    return self.reply(409, {'error': 'Server is stopping'})
+                if parts[1] == 'start':
+                    with self.server.recording_start_lock:
+                        if self.server.stopping.is_set():
+                            return self.reply(409, {'error': 'Server is stopping'})
+                        return self.reply(200, capture.start())
                 if parts[1] in actions:
                     return self.reply(200, actions[parts[1]]())
             if len(parts) == 3 and parts[0] == 'system-recordings' and parts[2] == 'source' and self.command == 'GET':
@@ -209,6 +215,7 @@ if __name__ == '__main__':
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '8765'))), Handler)
     server.recordings = RecordingStore(DATA)
     server.stopping = threading.Event()
+    server.recording_start_lock = threading.Lock()
     print(f'http://127.0.0.1:{server.server_port}', flush=True)
     def terminate(signum, frame):
         raise KeyboardInterrupt
