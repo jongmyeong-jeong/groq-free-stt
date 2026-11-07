@@ -57,10 +57,9 @@ def audio_duration(source):
             duration = float(probe.stdout.strip())
         except ValueError:
             # MediaRecorder's streamed WebM may omit container duration metadata.
-            # Count decoded audio time with timestamps reset to the sample clock.
+            # Measure the decoded end on the source timestamp timeline.
             decoded = subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-i', str(source),
-                                      '-map', '0:a:0', '-af', 'asetpts=N/SR/TB',
-                                      '-f', 'null', '-', '-progress', 'pipe:1'],
+                                      '-map', '0:a:0', '-f', 'null', '-', '-progress', 'pipe:1'],
                                      capture_output=True, text=True, check=True)
             times = re.findall(r'^out_time_us=(\d+)$', decoded.stdout, re.MULTILINE)
             duration = int(times[-1]) / 1_000_000 if times else 0
@@ -91,7 +90,8 @@ def split_audio(source, directory):
         path = Path(directory) / f'chunk-{index}.wav'
         try:
             subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-ss', str(start), '-i', str(source),
-                            '-t', str(end - start), '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le',
+                            '-t', str(end - start), '-af', 'aresample=async=1:first_pts=0',
+                            '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le',
                             '-y', str(path)], capture_output=True, check=True)
         except (OSError, subprocess.CalledProcessError):
             raise AudioError('음성 파일을 분할할 수 없습니다.')

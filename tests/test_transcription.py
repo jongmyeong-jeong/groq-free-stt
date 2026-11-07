@@ -53,6 +53,30 @@ class AudioTest(unittest.TestCase):
             self.assertTrue(result['complete'])
             self.assertEqual(result['segments'][0]['text'], 'hello')
 
+    def test_streamed_webm_preserves_audio_after_timestamp_gap(self):
+        import subprocess
+        import tempfile
+        import wave
+        from pathlib import Path
+        from transcription import transcribe_file
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'gap.webm'
+            with source.open('wb') as output:
+                subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                                'sine=frequency=440:duration=10', '-af',
+                                r'asetpts=PTS+if(gte(T\,5)\,30/TB\,0)',
+                                '-c:a', 'libopus', '-f', 'webm', 'pipe:1'],
+                               stdout=output, check=True)
+            def api(path):
+                with wave.open(str(path)) as audio:
+                    self.assertAlmostEqual(audio.getnframes() / audio.getframerate(), 40, delta=0.1)
+                    audio.setpos(37 * audio.getframerate())
+                    self.assertNotEqual(set(audio.readframes(audio.getframerate())), {0})
+                return [{'start': 37, 'end': 38, 'text': 'after gap'}]
+            result = transcribe_file(source, 'gap.webm', 'now', api, lambda state: None)
+            self.assertTrue(result['complete'])
+            self.assertEqual(result['segments'][0]['start'], 37)
+
     def test_long_audio_splits_with_overlap_and_limits(self):
         import subprocess
         import tempfile
