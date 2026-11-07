@@ -28,3 +28,20 @@ test('deletion explains retained recording copies', async () => {
   assert.match(deletionMessage('source'), /보관된 녹음.*별도/);
   assert.match(deletionMessage('job'), /보관된 녹음.*별도/);
 });
+
+test('system recording creates a job without transferring audio through the browser', async () => {
+  const { createSystemJob } = await import('../web/app.mjs');
+  let sent;
+  const job = await createSystemJob('recording-id', async (path, options) => { sent = {path, options}; return {ok:true, json:async () => ({id:'job-id'})}; });
+  assert.equal(sent.path, '/system-recordings/recording-id/create-job');
+  assert.equal(sent.options.method, 'POST');
+  assert.equal(sent.options.body, '{}');
+  assert.equal(job.id, 'job-id');
+});
+
+test('failed system capture is usable only when a partial source was recovered', async () => {
+  const { canTranscribeRecovery } = await import('../web/app.mjs');
+  assert.equal(canTranscribeRecovery({type:'system', status:'failed', source:'abc.wav'}), true);
+  assert.equal(canTranscribeRecovery({type:'system', status:'failed', source:null}), false);
+  assert.equal(canTranscribeRecovery({type:'mic', status:'recovery_failed', source:'abc'}), false);
+});

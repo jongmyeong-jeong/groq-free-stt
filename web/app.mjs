@@ -3,6 +3,7 @@ import { MicrophoneRecording, recordingStorage, stopOnPageHide, validateRecovere
 export const deletionMessage = kind => (kind === 'source' ? '이 전사 항목의 원본 음성만 삭제합니다. 전사 결과는 유지됩니다.' : '이 전사 항목의 원본과 전사 결과를 삭제합니다.') + ' 보관된 녹음 목록에 있는 별도 복사본은 유지됩니다. 삭제할까요?';
 export const recordingLabel = status => ({recovery_pending:'복구 확인 필요', recovered:'복구됨', recovery_failed:'복구 실패', failed:'복구 실패', finished:'녹음 완료'}[status] || status);
 export const canTranscribeRecording = status => ['recovered', 'finished'].includes(status);
+export const canTranscribeRecovery = item => item.type === 'system' ? typeof item.source === 'string' && ['recovered', 'failed'].includes(item.status) : canTranscribeRecording(item.status);
 export const activeJob = jobs => jobs.find(job => ['transcribing', 'paused', 'waiting_limit'].includes(job.status));
 export const statusLabel = status => ({transcribing:'전사 중', paused:'일시 정지', waiting_limit:'한도 대기', completed:'전사 완료', stopped:'정지됨', failed:'실패', recovery_pending:'복구 확인 필요'}[status] || status);
 export async function request(path, options = {}, fetcher = fetch) {
@@ -13,6 +14,8 @@ export async function request(path, options = {}, fetcher = fetch) {
   }
   return response.json();
 }
+
+export function createSystemJob(id, fetcher = fetch) { return request(`/system-recordings/${encodeURIComponent(id)}/create-job`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}, fetcher); }
 
 if (typeof document !== 'undefined') start();
 function start() {
@@ -65,7 +68,7 @@ function start() {
       for (const job of jobs) { const row = el('div', null, 'row'); const open = button('', () => { selected = job; render(); }, 'open'); open.append(el('strong', job.name), el('small', statusLabel(job.status))); row.append(open); if (job.status === 'completed') { row.append(link(job, 'md'), link(job, 'txt')); } section.append(row); }
       main.append(section);
       const recoveries = [...recordings.filter(item => ['recovery_pending','recovered','recovery_failed','finished'].includes(item.status)).map(item => ({...item, type:'mic'})), ...systemRecordings.map(item => ({...item, type:'system'}))];
-      if (recoveries.length) { const recovery = el('section', null, 'recovery'); recovery.append(el('h2', '보관된 녹음')); for (const item of recoveries) { const row = el('div', null, 'row'); row.append(el('span', `${item.type === 'mic' ? '마이크' : '시스템 소리'} · ${recordingLabel(item.status)}`)); if (item.type === 'mic' && item.status === 'recovery_pending') row.append(button('복구 확인', () => run(async () => { const context = new AudioContext(); try { await validateRecoveredRecording(recordingStorage(), item.id, context); } finally { await context.close(); } }))); if (canTranscribeRecording(item.status)) { const b = button('전사', () => run(() => transcribeSource(`/${item.type === 'mic' ? 'recordings' : 'system-recordings'}/${encodeURIComponent(item.id)}/source`, item.type === 'mic' ? '마이크 녹음.webm' : '시스템 녹음.wav'))); b.disabled = !!active || busy; row.append(b); } const remove = button('녹음 삭제', () => confirmAction('이 보관된 녹음 원본을 삭제합니다. 이미 만든 전사 항목은 유지됩니다. 삭제할까요?', () => request(`/${item.type === 'mic' ? 'recordings' : 'system-recordings'}/${encodeURIComponent(item.id)}`, {method:'DELETE'}))); row.append(remove); recovery.append(row); } main.append(recovery); }
+      if (recoveries.length) { const recovery = el('section', null, 'recovery'); recovery.append(el('h2', '보관된 녹음')); for (const item of recoveries) { const row = el('div', null, 'row'); row.append(el('span', `${item.type === 'mic' ? '마이크' : '시스템 소리'} · ${item.type === 'system' && item.status === 'failed' && item.source ? '녹음 실패 · 부분 원본 복구됨' : recordingLabel(item.status)}`)); if (item.type === 'mic' && item.status === 'recovery_pending') row.append(button('복구 확인', () => run(async () => { const context = new AudioContext(); try { await validateRecoveredRecording(recordingStorage(), item.id, context); } finally { await context.close(); } }))); if (canTranscribeRecovery(item)) { const b = button('전사', () => run(async () => { if (item.type === 'system') { const job = await createSystemJob(item.id); selected = job; await startJob(job.id); } else await transcribeSource(`/recordings/${encodeURIComponent(item.id)}/source`, '마이크 녹음.webm'); })); b.disabled = !!active || busy; row.append(b); } const remove = button('녹음 삭제', () => confirmAction('이 보관된 녹음 원본을 삭제합니다. 이미 만든 전사 항목은 유지됩니다. 삭제할까요?', () => request(`/${item.type === 'mic' ? 'recordings' : 'system-recordings'}/${encodeURIComponent(item.id)}`, {method:'DELETE'}))); row.append(remove); recovery.append(row); } main.append(recovery); }
 
     } else {
       const job = selected, id = encodeURIComponent(job.id);
