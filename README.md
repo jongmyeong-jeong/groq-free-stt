@@ -6,9 +6,13 @@ Mac의 시스템 소리, 마이크 또는 음성 파일을 전사하는 로컬 �
 
 macOS 14.2 이상, Python 3, `make`, Swift 컴파일러와 `codesign`(Xcode 또는 Command Line Tools), `ffmpeg`와 `ffprobe`, Groq API 키가 필요합니다. 시스템 소리와 마이크 녹음에는 각각 macOS 시스템 오디오 권한과 브라우저·macOS 마이크 권한이 필요합니다.
 
-저장소에서 `make setup`을 실행한 뒤 생성된 `.env`에 `GROQ_API_KEY=키`를 입력합니다. 기존 `.env`는 덮어쓰지 않습니다. 그런 다음 `make start`로 서버를 시작합니다.
+```sh
+make setup  # 초기 설정 및 시스템 오디오 프로그램 빌드
+make start  # 서버 시작
+make stop   # 서버 종료
+```
 
-브라우저에서 <http://127.0.0.1:8765>를 엽니다. 종료하려면 다른 터미널에서 `make stop`을 실행합니다. `PORT`를 변경했다면 시작과 종료에 같은 값을 지정하고, API 키를 변경했다면 서버를 재시작하세요.
+`make setup` 후 `.env`에 `GROQ_API_KEY=키`를 입력하세요. 기존 `.env`는 덮어쓰지 않습니다. 서버를 시작한 뒤 <http://127.0.0.1:8765>를 열고, 종료할 때는 다른 터미널에서 `make stop`을 실행합니다. `PORT`를 변경했다면 시작과 종료에 같은 값을 지정하고, API 키를 변경했다면 서버를 재시작하세요.
 
 ## 사용과 데이터
 
