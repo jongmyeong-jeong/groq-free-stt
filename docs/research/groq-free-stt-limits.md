@@ -37,7 +37,7 @@ SDK 소스는 `Retry-After`를 직접 기다리는 범위를 `0 < 값 <= 60초`�
 
 ### 현재 코드와 차이
 
-기준 커밋은 `b351bae`다. 현재 클라이언트는 Turbo·한국어를 기본으로 쓰고 SDK 재시도를 명시하지 않으며, 정상 응답 헤더를 저장하지 않는다. 429를 자체 오류로 바꿀 때 구체적 헤더 정보를 보관하지 않는다. 배치는 크기 기반 분할 후 순차 요청하고, 429인 구간을 실패 처리한 뒤 다음 구간을 시도한다. [groq_client.py](https://github.com/jongmyeong-jeong/lonta/blob/b351bae/app/groq_client.py#L139), [batch_transcribe.py](https://github.com/jongmyeong-jeong/lonta/blob/b351bae/app/batch_transcribe.py#L372)
+기준 커밋은 `b351bae`다. 현재 클라이언트는 Turbo·한국어를 기본으로 쓰고 SDK 재시도를 명시하지 않으며, 정상 응답 헤더를 저장하지 않는다. 429를 자체 오류로 바꿀 때 구체적 헤더 정보를 보관하지 않는다. 배치는 크기 기반 분할 후 순차 요청하고, 429인 구간을 실패 처리한 뒤 다음 구간을 시도한다. [groq_client.py](../../reference/legacy-source/app/groq_client.py.txt#L139), [batch_transcribe.py](../../reference/legacy-source/app/batch_transcribe.py.txt#L372)
 
 ## 공식 자료로 확정하지 못한 부분
 
