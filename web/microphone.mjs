@@ -42,9 +42,12 @@ export class MicrophoneRecording {
         try {
           if ((await storage.control()).stop) await this.stop(true);
           else if (storage.heartbeat) await storage.heartbeat(id);
-        } catch {
-          // Stop capture if the server disappears; committed chunks survive.
-          await this.stop(true).catch(() => {});
+        } catch (error) {
+          if (!this.error && !this.stopping) {
+            this.error = error;
+            this.stop(true).catch(() => {});
+            onError(error);
+          }
         } finally {
           this.checking = false;
         }
@@ -62,8 +65,11 @@ export class MicrophoneRecording {
     this.stopping = new Promise((resolve, reject) => {
       this.recorder.onstop = () => {
         this.stream.getTracks().forEach(track => track.stop());
-        this.pending.then(() => {
-          if (this.error) throw this.error;
+        this.pending.then(async () => {
+          if (this.error) {
+            try { await this.storage.finish(this.id, elapsed, true); } catch {}
+            throw this.error;
+          }
           return this.storage.finish(this.id, elapsed, recover);
         }).then(resolve, reject);
       };
@@ -76,10 +82,10 @@ export class MicrophoneRecording {
 // Same-origin transport for app.py. `keepalive` gives page-close requests a chance
 // to complete, but browsers may discard outstanding data during termination.
 export function recordingStorage(fetcher = fetch) {
-  async function request(path, body) {
+  async function request(path, body, keepalive = true) {
     const response = await fetcher(path, body === undefined ? {} : {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body), keepalive: true,
+      body: JSON.stringify(body), keepalive,
     });
     if (!response.ok) throw new Error(`Recording request failed (${response.status})`);
     return response.json();
@@ -90,7 +96,7 @@ export function recordingStorage(fetcher = fetch) {
       const bytes = new Uint8Array(await blob.arrayBuffer());
       let binary = '';
       for (const byte of bytes) binary += String.fromCharCode(byte);
-      return request(`/recordings/${id}/chunks`, {sequence, data: btoa(binary), elapsed});
+      return request(`/recordings/${id}/chunks`, {sequence, data: btoa(binary), elapsed}, false);
     },
     finish: (id, elapsed, recover) => request(`/recordings/${id}/finish`, {elapsed, recover}),
     control: () => request('/recording-control'),

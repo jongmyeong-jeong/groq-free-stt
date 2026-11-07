@@ -5,15 +5,19 @@ permission and begins one-second MediaRecorder chunks. Its `pause`, `resume`,
 `elapsed` and async `stop` methods control capture. Elapsed time uses a monotonic
 clock and includes pauses. Pausing mutes the audio track while recording continues,
 so the recorded media contains silence for the paused interval. The caller passes
-`onError` to surface storage failures, which immediately stop capture, and
+`onError` to surface storage or control failures, which immediately stop capture
+and attempt to finalize the retained chunks for recovery, and
 registers `stopOnPageHide(recording)`; page teardown is best effort and pending
-chunks can be lost. A failed write prevents marking a recording finished.
+chunks can be lost. A failed write cannot mark a recording as normally finished.
 
 `GET /recordings` returns recordings without creating transcription jobs. On
 server restart interrupted sessions with fragments become `recovery_pending`;
 empty sessions become `recovery_failed`. A recording whose page vanished without
 finishing also becomes recoverable on a list request after its heartbeat has been
-absent for 120 seconds. The home UI must refresh the list to observe this change.
+absent for 120 seconds. Each saved chunk also refreshes this timestamp. The home
+UI must refresh the list to observe this change. A page suspended for over 120
+seconds can be mistaken for an abandoned recording; on resuming, capture stops
+and reports the error, preserving the previously saved chunks.
 For each pending item the home UI calls
 `validateRecoveredRecording(storage, id, audioContext)` to decode the preserved
 source and mark it `recovered` or `recovery_failed`. A failure retains its source.

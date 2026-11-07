@@ -77,12 +77,13 @@ class RecordingStore:
             if existing:
                 if existing['data'] != data:
                     raise ValueError('Conflicting chunk')
+                db.execute('UPDATE recordings SET last_seen = ? WHERE id = ?', (self.clock(), recording_id))
                 return
             count = db.execute('SELECT COUNT(*) FROM chunks WHERE recording_id = ?', (recording_id,)).fetchone()[0]
             if sequence != count:
                 raise ValueError('Out-of-order chunk')
             db.execute('INSERT INTO chunks VALUES (?, ?, ?)', (recording_id, sequence, data))
-            db.execute('UPDATE recordings SET elapsed = MAX(elapsed, ?) WHERE id = ?', (elapsed, recording_id))
+            db.execute('UPDATE recordings SET elapsed = MAX(elapsed, ?), last_seen = ? WHERE id = ?', (elapsed, self.clock(), recording_id))
 
     def finish(self, recording_id, elapsed, recover=False):
         if not isinstance(recover, bool):

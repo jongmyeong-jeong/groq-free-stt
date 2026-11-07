@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MicrophoneRecording, validateRecoveredRecording, stopOnPageHide } from '../web/microphone.mjs';
+import { MicrophoneRecording, validateRecoveredRecording, stopOnPageHide, recordingStorage } from '../web/microphone.mjs';
 
 test('pause includes elapsed time and stop persists ordered chunks before finishing', async () => {
   let now = 0;
@@ -54,7 +54,7 @@ test('denied permission does not create a recording', async () => {
   assert.equal(started, false);
 });
 
-test('a failed chunk prevents marking the recording finished', async () => {
+test('a failed chunk finalizes only the retained audio for recovery', async () => {
   let finished = false;
   class Recorder {
     constructor() { this.mimeType = 'audio/webm'; this.state = 'inactive'; }
@@ -63,10 +63,10 @@ test('a failed chunk prevents marking the recording finished', async () => {
   }
   const recording = await MicrophoneRecording.start({
     mediaDevices: {getUserMedia: async () => ({getTracks: () => []})}, Recorder, clock: () => 0,
-    storage: {start: async () => ({id: 'one'}), append: async () => { throw new Error('disk full'); }, finish: async () => { finished = true; }}
+    storage: {start: async () => ({id: 'one'}), append: async () => { throw new Error('disk full'); }, finish: async (id, elapsed, recover) => { finished = recover; }}
   });
   await assert.rejects(recording.stop(), /disk full/);
-  assert.equal(finished, false);
+  assert.equal(finished, true);
 });
 
 
@@ -88,6 +88,41 @@ test('a failed upload stops the microphone and reports the error immediately', a
   assert.match((await reported).message, /disk full/);
   assert.equal(stopped, true);
   await assert.rejects(recording.stop(), /disk full/);
+});
+
+test('heartbeat failure stops capture, reports error, and finalizes retained audio for recovery', async () => {
+  let report;
+  const reported = new Promise(resolve => { report = resolve; });
+  const finishes = [];
+  let stopped = false;
+  class Recorder {
+    constructor() { this.mimeType = 'audio/webm'; this.state = 'inactive'; }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; this.onstop(); }
+  }
+  const recording = await MicrophoneRecording.start({
+    mediaDevices: {getUserMedia: async () => ({getTracks: () => [{stop: () => { stopped = true; }}]})},
+    Recorder, onError: report,
+    storage: {start: async () => ({id: 'one'}), control: async () => ({stop: false}),
+      heartbeat: async () => { throw new Error('connection lost'); },
+      finish: async (...args) => finishes.push(args)}
+  });
+  assert.match((await reported).message, /connection lost/);
+  await assert.rejects(recording.stop(), /connection lost/);
+  assert.equal(stopped, true);
+  assert.equal(finishes[0][2], true);
+});
+
+test('audio chunks are sent without the keepalive size limit', async () => {
+  const requests = [];
+  const storage = recordingStorage(async (path, options) => {
+    requests.push([path, options]);
+    return {ok: true, json: async () => ({})};
+  });
+  await storage.append('one', 0, new Blob([new Uint8Array(100000)]), 1);
+  await storage.finish('one', 1, true);
+  assert.notEqual(requests[0][1].keepalive, true);
+  assert.equal(requests[1][1].keepalive, true);
 });
 
 test('recovery validation records decoding failure without discarding data', async () => {

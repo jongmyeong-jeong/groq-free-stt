@@ -22,6 +22,16 @@ class RecordingStoreTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.heartbeat(key)
 
+    def test_chunk_activity_keeps_a_recording_alive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            now = [100.0]
+            store = RecordingStore(Path(temp), clock=lambda: now[0])
+            key = store.start('audio/webm')['id']
+            now[0] += 110
+            store.append(key, 0, b'audio', 110)
+            now[0] += 20
+            self.assertEqual(store.list()[0]['status'], 'recording')
+
     def test_finish_keeps_elapsed_time_and_rejects_late_or_conflicting_chunks(self):
         with tempfile.TemporaryDirectory() as temp:
             store = RecordingStore(Path(temp))
