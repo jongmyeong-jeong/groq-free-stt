@@ -1,0 +1,49 @@
+.ambient-bg {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ambient-bg__aura {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 900px;
+  height: 900px;
+  background: radial-gradient(
+    circle at center,
+    rgba(255, 87, 69, 0.32) 0%,
+    rgba(255, 87, 69, 0.14) 32%,
+    rgba(255, 87, 69, 0.05) 55%,
+    transparent 75%
+  );
+  filter: blur(80px);
+  animation:
+    ambient-entrance 1000ms ease-out,
+    ambient-breathe 4s ease-in-out 1000ms infinite;
+}
+
+@keyframes ambient-breathe {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(0.95);
+    opacity: 0.9;
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes ambient-entrance {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+}

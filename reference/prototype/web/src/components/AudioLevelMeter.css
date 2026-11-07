@@ -1,0 +1,17 @@
+.audio-level-meter {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
+  padding: 0 44px;
+}
+
+.audio-level-meter__bar {
+  width: 6px;
+  background-color: #ff4b3a;
+  border-radius: 9999px;
+  flex-shrink: 0;
+  /* Matched to the ~33ms scroll cadence — longer transitions smear the wave. */
+  transition: height 40ms linear;
+}

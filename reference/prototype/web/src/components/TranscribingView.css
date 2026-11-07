@@ -1,0 +1,42 @@
+.transcribing-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 32px;
+}
+
+.transcribing-view__spinner {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.05);
+  border-top-color: #ff4b3a;
+  animation: transcribing-spin 1s linear infinite;
+}
+
+.transcribing-view__text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.transcribing-view__title {
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 18px;
+  color: #fafafa;
+}
+
+.transcribing-view__subtitle {
+  font-family: 'Inter', sans-serif;
+  font-weight: 400;
+  font-size: 14px;
+  color: #9f9fa9;
+}
+
+@keyframes transcribing-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
