@@ -154,7 +154,6 @@ class GroqClient:
                     connection.sock.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
-                connection.close()
 
     def transcribe(self, path):
         import http.client
@@ -174,6 +173,10 @@ class GroqClient:
                 raise RuntimeError('cancelled')
             self.connection = connection
         try:
+            connection.connect()
+            with self.lock:
+                if self.cancelled:
+                    raise RuntimeError('cancelled')
             connection.request('POST', '/openai/v1/audio/transcriptions', body, {
                 'Authorization': f'Bearer {self.key}', 'Content-Type': f'multipart/form-data; boundary={boundary}'})
             response = connection.getresponse()

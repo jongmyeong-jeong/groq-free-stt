@@ -65,6 +65,19 @@ class AppTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 413)
         self.assertIn('64 MB', json.loads(caught.exception.read())['error'])
 
+    def test_subresource_methods_cannot_mutate_job(self):
+        _, job = self.request('POST', '/jobs', {'name': 'audio.wav', 'source': base64.b64encode(b'audio').decode()})
+        for suffix in ('transcribe', 'md', 'txt'):
+            self.assertEqual(self.request('DELETE', f"/jobs/{job['id']}/{suffix}")[0], 405)
+            self.assertEqual(self.request('PATCH', f"/jobs/{job['id']}/{suffix}", {'status': 'stopped'})[0], 405)
+        self.assertEqual(self.request('GET', f"/jobs/{job['id']}")[1]['status'], 'transcribing')
+
+    def test_active_job_and_source_cannot_be_deleted(self):
+        _, job = self.request('POST', '/jobs', {'name': 'audio.wav', 'source': base64.b64encode(b'audio').decode()})
+        self.assertEqual(self.request('DELETE', f"/jobs/{job['id']}")[0], 409)
+        self.assertEqual(self.request('DELETE', f"/jobs/{job['id']}/source")[0], 409)
+        self.assertTrue(self.request('GET', f"/jobs/{job['id']}")[1]['has_source'])
+
     def test_large_upload_streams_and_can_be_deleted(self):
         import http.client
         from urllib.parse import urlsplit
@@ -84,6 +97,7 @@ class AppTest(unittest.TestCase):
         job = json.loads(response.read())
         conn.close()
         self.assertTrue(job['has_source'])
+        self.assertEqual(self.request('PATCH', f"/jobs/{job['id']}", {'status': 'stopped'})[0], 200)
         self.assertEqual(self.request('DELETE', f"/jobs/{job['id']}/source")[0], 200)
         self.assertFalse(self.request('GET', f"/jobs/{job['id']}")[1]['has_source'])
 
@@ -151,6 +165,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(restored['usage'], [{'seconds': 5}])
         self.assertEqual(restored['result']['txt'], 'hello')
         self.assertEqual(self.request('GET', f'/jobs/{job_id}/source')[1]['source'], base64.b64encode(b'audio').decode())
+        self.assertEqual(self.request('PATCH', f'/jobs/{job_id}', {'status': 'completed'})[0], 200)
         self.assertEqual(self.request('DELETE', f'/jobs/{job_id}/source')[0], 200)
         _, after = self.request('GET', f'/jobs/{job_id}')
         self.assertFalse(after['has_source'])

@@ -17,8 +17,8 @@ def start(db_path, job_id, key):
     if not key:
         raise ValueError('Groq API 키를 .env에 입력하세요.')
     with _lock:
-        if job_id in _workers:
-            raise ValueError('이미 전사 중입니다.')
+        if _workers:
+            raise ValueError('이미 전사 중이거나 정지 처리 중입니다.')
         with sqlite3.connect(db_path) as db:
             row = db.execute('SELECT name, source, status, result, source_path FROM jobs WHERE id = ?', (job_id,)).fetchone()
             if not row or (row[1] is None and row[4] is None) or row[2] not in ('transcribing', 'paused'):
@@ -37,6 +37,24 @@ def stop(job_id):
         client = _workers.get(job_id)
         if client:
             client.cancel()
+
+
+def delete(db_path, job_id, source_only=False):
+    """Reject deletion while a job is unfinished or its worker is stopping."""
+    with _lock, sqlite3.connect(db_path) as db:
+        if job_id in _workers:
+            return False
+        row = db.execute('SELECT status, source_path FROM jobs WHERE id = ?', (job_id,)).fetchone()
+        if not row or row[0] in ('transcribing', 'paused', 'waiting_limit'):
+            return False
+        if source_only:
+            db.execute('UPDATE jobs SET source = NULL, source_path = NULL WHERE id = ?', (job_id,))
+        else:
+            db.execute('DELETE FROM jobs WHERE id = ?', (job_id,))
+        db.commit()
+        if row[1]:
+            Path(row[1]).unlink(missing_ok=True)
+        return True
 
 
 def _run(db_path, job_id, name, source, source_path, state, client):
