@@ -4,10 +4,12 @@ export class MicrophoneAccessError extends Error {
 export class MicrophoneStartError extends Error {
   constructor(cause) { super(cause.message, {cause}); this.name = 'MicrophoneStartError'; }
 }
+export class MicrophoneUnsupportedError extends Error {}
 
 // Storage provides start(mimeType), append(id, sequence, Blob, elapsed), and finish(id, seconds).
 export class MicrophoneRecording {
-  static async start({storage, mediaDevices = navigator.mediaDevices, Recorder = MediaRecorder, clock = () => performance.now(), onError = () => {}, onServerStop = () => {}}) {
+  static async start({storage, mediaDevices = globalThis.navigator?.mediaDevices, Recorder = globalThis.MediaRecorder, clock = () => performance.now(), onError = () => {}, onServerStop = () => {}}) {
+    if (typeof mediaDevices?.getUserMedia !== 'function' || typeof Recorder !== 'function') throw new MicrophoneUnsupportedError();
     let stream;
     try { stream = await mediaDevices.getUserMedia({audio: true}); }
     catch (error) { throw new MicrophoneAccessError(error); }

@@ -1,4 +1,4 @@
-import { MicrophoneAccessError, MicrophoneStartError, MicrophoneRecording, recordingStorage, stopOnPageHide } from './microphone.mjs';
+import { MicrophoneAccessError, MicrophoneStartError, MicrophoneUnsupportedError, MicrophoneRecording, recordingStorage, stopOnPageHide } from './microphone.mjs';
 
 export const deletionMessage = kind => (kind === 'source' ? '이 전사 항목의 원본 음성만 삭제합니다. 전사 결과는 유지됩니다.' : '이 전사 항목의 원본과 전사 결과를 삭제합니다.') + ' 보관된 녹음 목록에 있는 별도 복사본은 유지됩니다. 삭제할까요?';
 export const recordingLabel = status => ({recovery_pending:'복구 확인 필요', recovered:'복구됨', recovery_failed:'복구 실패', failed:'복구 실패', finished:'녹음 완료'}[status] || status);
@@ -6,6 +6,7 @@ export const canTranscribeRecording = status => ['recovered', 'finished'].includ
 export const canTranscribeRecovery = item => item.type === 'system' ? typeof item.source === 'string' && ['recovered', 'failed'].includes(item.status) : canTranscribeRecording(item.status);
 export const availableDownloads = job => job.status === 'stopped' ? [] : ['md', 'txt'].filter(format => typeof job.result?.[format] === 'string');
 export function failureNotice(error) {
+  if (error instanceof MicrophoneUnsupportedError) return '이 브라우저는 마이크 녹음을 지원하지 않습니다. 다른 최신 브라우저에서 다시 시도하세요.';
   if (error instanceof MicrophoneAccessError) {
     if (error.cause?.name === 'NotAllowedError') return '마이크 권한이 거부되었습니다. 브라우저 사이트 설정과 시스템 설정에서 마이크 접근을 허용한 뒤 다시 시도하세요.';
     if (error.cause?.name === 'NotFoundError') return '마이크를 찾을 수 없습니다. 마이크 연결과 시스템 입력 설정을 확인한 뒤 다시 시도하세요.';

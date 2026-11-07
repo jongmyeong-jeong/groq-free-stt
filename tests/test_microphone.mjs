@@ -206,3 +206,16 @@ test('missing microphone and recording storage failure get distinct guidance', a
     storage: {start: async () => { throw new DOMException('저장 실패', 'NotAllowedError'); }}
   }), error => { assert.match(failureNotice(error), /저장 실패/); assert.doesNotMatch(failureNotice(error), /마이크 권한|전사 목록/); return true; });
 });
+
+test('unsupported browser explains that microphone recording is unavailable', async () => {
+  const { failureNotice } = await import('../web/app.mjs');
+  let requested = false;
+  await assert.rejects(MicrophoneRecording.start({
+    mediaDevices: {getUserMedia: async () => { requested = true; }}, Recorder: undefined, storage: {}
+  }), error => {
+    assert.match(failureNotice(error), /브라우저.*지원하지/);
+    assert.doesNotMatch(failureNotice(error), /전사 목록/);
+    return true;
+  });
+  assert.equal(requested, false);
+});
