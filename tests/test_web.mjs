@@ -45,3 +45,14 @@ test('failed system capture is usable only when a partial source was recovered',
   assert.equal(canTranscribeRecovery({type:'system', status:'failed', source:null}), false);
   assert.equal(canTranscribeRecovery({type:'mic', status:'recovery_failed', source:'abc'}), false);
 });
+
+test('microphone recordings and retries create jobs on the server', async () => {
+  const { createMicrophoneJob, retryJob } = await import('../web/app.mjs');
+  const calls = [];
+  const fetcher = async (path, options) => { calls.push({path, options}); return {ok:true, json:async () => ({id:'job'})}; };
+  await createMicrophoneJob('mic', '녹음.webm', fetcher);
+  await retryJob('old', fetcher);
+  assert.equal(calls[0].path, '/recordings/mic/jobs');
+  assert.deepEqual(JSON.parse(calls[0].options.body), {name:'녹음.webm'});
+  assert.equal(calls[1].path, '/jobs/old/retry');
+});

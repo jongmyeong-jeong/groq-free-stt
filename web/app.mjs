@@ -17,6 +17,9 @@ export async function request(path, options = {}, fetcher = fetch) {
 
 export function createSystemJob(id, fetcher = fetch) { return request(`/system-recordings/${encodeURIComponent(id)}/create-job`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}, fetcher); }
 
+export function createMicrophoneJob(id, name, fetcher = fetch) { return request(`/recordings/${encodeURIComponent(id)}/jobs`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})}, fetcher); }
+export function retryJob(id, fetcher = fetch) { return request(`/jobs/${encodeURIComponent(id)}/retry`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}, fetcher); }
+
 if (typeof document !== 'undefined') start();
 function start() {
   const root = document.querySelector('#app');
@@ -28,7 +31,6 @@ function start() {
   async function run(action) { if (busy) return; busy = true; notice = ''; render(); try { await action(); await refresh(); } catch (error) { notice = error.message; } finally { busy = false; render(); } }
   async function startJob(id) { try { await request(`/jobs/${encodeURIComponent(id)}/transcribe`, json({})); failedStarts.delete(id); } catch (error) { failedStarts.add(id); throw error; } finally { sessionStorage.setItem('failed-transcription-starts', JSON.stringify([...failedStarts])); } }
   async function refresh() { jobs = await request('/jobs'); recordings = await recordingStorage().list(); if (!systemRecording) systemRecordings = await request('/system-recordings').catch(() => []); if (selected) selected = jobs.find(job => job.id === selected.id) || null; }
-  async function transcribeSource(path, name) { const {source} = await request(path); const bytes = Uint8Array.from(atob(source), char => char.charCodeAt(0)); const job = await request('/uploads', {method:'POST', headers:{'Content-Type':'application/octet-stream', 'X-Filename':encodeURIComponent(name)}, body:bytes}); selected = job; await startJob(job.id); }
   function home() { selected = null; render(); }
   function confirmAction(message, action) { if (window.confirm(message)) run(action); }
   function link(job, format) { const a = el('a', format.toUpperCase()); a.href = `/jobs/${encodeURIComponent(job.id)}/${format}`; a.download = ''; return a; }
@@ -47,9 +49,7 @@ function start() {
       controls.append(button(paused ? '계속' : '일시 정지', () => { paused ? recording.resume() : recording.pause(); paused = !paused; render(); }));
       controls.append(button('녹음 종료', () => run(async () => {
         const current = recording; try { await current.stop(); } finally { removePageHide?.(); recording = null; paused = false; }
-        const {source} = await recordingStorage().source(current.id);
-        const bytes = Uint8Array.from(atob(source), char => char.charCodeAt(0));
-        const job = await request('/uploads', {method:'POST', headers:{'Content-Type':'application/octet-stream', 'X-Filename':encodeURIComponent('마이크 녹음.webm')}, body:bytes});
+        const job = await createMicrophoneJob(current.id, '마이크 녹음.webm');
         selected = job; await startJob(job.id);
       }))); main.append(controls);
     } else if (!selected) {
@@ -68,7 +68,7 @@ function start() {
       for (const job of jobs) { const row = el('div', null, 'row'); const open = button('', () => { selected = job; render(); }, 'open'); open.append(el('strong', job.name), el('small', statusLabel(job.status))); row.append(open); if (job.status === 'completed') { row.append(link(job, 'md'), link(job, 'txt')); } section.append(row); }
       main.append(section);
       const recoveries = [...recordings.filter(item => ['recovery_pending','recovered','recovery_failed','finished'].includes(item.status)).map(item => ({...item, type:'mic'})), ...systemRecordings.map(item => ({...item, type:'system'}))];
-      if (recoveries.length) { const recovery = el('section', null, 'recovery'); recovery.append(el('h2', '보관된 녹음')); for (const item of recoveries) { const row = el('div', null, 'row'); row.append(el('span', `${item.type === 'mic' ? '마이크' : '시스템 소리'} · ${item.type === 'system' && item.status === 'failed' && item.source ? '녹음 실패 · 부분 원본 복구됨' : recordingLabel(item.status)}`)); if (item.type === 'mic' && item.status === 'recovery_pending') row.append(button('복구 확인', () => run(async () => { const context = new AudioContext(); try { await validateRecoveredRecording(recordingStorage(), item.id, context); } finally { await context.close(); } }))); if (canTranscribeRecovery(item)) { const b = button('전사', () => run(async () => { if (item.type === 'system') { const job = await createSystemJob(item.id); selected = job; await startJob(job.id); } else await transcribeSource(`/recordings/${encodeURIComponent(item.id)}/source`, '마이크 녹음.webm'); })); b.disabled = !!active || busy; row.append(b); } const remove = button('녹음 삭제', () => confirmAction('이 보관된 녹음 원본을 삭제합니다. 이미 만든 전사 항목은 유지됩니다. 삭제할까요?', () => request(`/${item.type === 'mic' ? 'recordings' : 'system-recordings'}/${encodeURIComponent(item.id)}`, {method:'DELETE'}))); row.append(remove); recovery.append(row); } main.append(recovery); }
+      if (recoveries.length) { const recovery = el('section', null, 'recovery'); recovery.append(el('h2', '보관된 녹음')); for (const item of recoveries) { const row = el('div', null, 'row'); row.append(el('span', `${item.type === 'mic' ? '마이크' : '시스템 소리'} · ${item.type === 'system' && item.status === 'failed' && item.source ? '녹음 실패 · 부분 원본 복구됨' : recordingLabel(item.status)}`)); if (item.type === 'mic' && item.status === 'recovery_pending') row.append(button('복구 확인', () => run(async () => { const context = new AudioContext(); try { await validateRecoveredRecording(recordingStorage(), item.id, context); } finally { await context.close(); } }))); if (canTranscribeRecovery(item)) { const b = button('전사', () => run(async () => { if (item.type === 'system') { const job = await createSystemJob(item.id); selected = job; await startJob(job.id); } else { const job = await createMicrophoneJob(item.id, '마이크 녹음.webm'); selected = job; await startJob(job.id); } })); b.disabled = !!active || busy; row.append(b); } const remove = button('녹음 삭제', () => confirmAction('이 보관된 녹음 원본을 삭제합니다. 이미 만든 전사 항목은 유지됩니다. 삭제할까요?', () => request(`/${item.type === 'mic' ? 'recordings' : 'system-recordings'}/${encodeURIComponent(item.id)}`, {method:'DELETE'}))); row.append(remove); recovery.append(row); } main.append(recovery); }
 
     } else {
       const job = selected, id = encodeURIComponent(job.id);
@@ -87,7 +87,7 @@ function start() {
         controls.append(button('정지', () => confirmAction('전사를 정지하면 부분 전사는 삭제되고 원본 음성은 보관됩니다. 정지할까요?', async () => { await request(`/jobs/${id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:'stopped'})}); selected = null; })));
         main.append(controls);
       }
-      if (job.status === 'stopped') { main.append(el('p', job.has_source ? '원본이 보관되어 있습니다.' : '원본이 삭제되었습니다.', 'hint')); if (job.has_source) { const retry = button('다시 전사', () => run(() => transcribeSource(`/jobs/${id}/source`, job.name))); retry.disabled = !!activeJob(jobs) || busy; main.append(retry); } }
+      if (job.status === 'stopped') { main.append(el('p', job.has_source ? '원본이 보관되어 있습니다.' : '원본이 삭제되었습니다.', 'hint')); if (job.has_source) { const retry = button('다시 전사', () => run(async () => { const retry = await retryJob(job.id); selected = retry; await startJob(retry.id); })); retry.disabled = !!activeJob(jobs) || busy; main.append(retry); } }
       const actions = el('div', null, 'actions');
       actions.append(button('제목 수정', () => { const name = window.prompt('전사 제목', job.name); if (name?.trim() && name.trim() !== job.name) run(() => request(`/jobs/${id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name.trim()})})); }));
       if (job.has_source && !['transcribing','paused','waiting_limit'].includes(job.status)) actions.append(button('원본 삭제', () => confirmAction(deletionMessage('source'), () => request(`/jobs/${id}/source`, {method:'DELETE'}))));
