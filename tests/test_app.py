@@ -20,7 +20,8 @@ class AppTest(unittest.TestCase):
         self.home = Path(self.temp.name)
         (self.home / '.lonta').mkdir()
         (self.home / '.lonta' / 'keep').write_text('untouched')
-        shutil.copyfile(ROOT / 'app.py', self.home / 'app.py')
+        for filename in ('app.py', 'job_transcription.py', 'transcription.py'):
+            shutil.copyfile(ROOT / filename, self.home / filename)
         (self.home / '.env').write_text('GROQ_API_KEY=secret-key\n')
         self.start()
 
@@ -55,6 +56,49 @@ class AppTest(unittest.TestCase):
                 return response.status, json.loads(body)
         except urllib.error.HTTPError as error:
             return error.code, json.loads(error.read())
+
+    def test_oversized_request_is_rejected_before_reading_body(self):
+        req = urllib.request.Request(self.url + '/jobs', data=b'', method='POST', headers={
+            'Content-Type': 'application/json', 'Content-Length': '86000001'})
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(req, timeout=3)
+        self.assertEqual(caught.exception.code, 413)
+        self.assertIn('64 MB', json.loads(caught.exception.read())['error'])
+
+    def test_large_upload_streams_and_can_be_deleted(self):
+        import http.client
+        from urllib.parse import urlsplit
+        address = urlsplit(self.url)
+        conn = http.client.HTTPConnection(address.hostname, address.port, timeout=15)
+        size = 65_000_000
+        conn.putrequest('POST', '/uploads')
+        conn.putheader('Content-Type', 'application/octet-stream')
+        conn.putheader('X-Filename', 'long.wav')
+        conn.putheader('Content-Length', str(size))
+        conn.endheaders()
+        block = b'\0' * 1_000_000
+        for _ in range(65):
+            conn.send(block)
+        response = conn.getresponse()
+        self.assertEqual(response.status, 201)
+        job = json.loads(response.read())
+        conn.close()
+        self.assertTrue(job['has_source'])
+        self.assertEqual(self.request('DELETE', f"/jobs/{job['id']}/source")[0], 200)
+        self.assertFalse(self.request('GET', f"/jobs/{job['id']}")[1]['has_source'])
+
+    def test_invalid_audio_reports_failure_without_calling_groq(self):
+        _, job = self.request('POST', '/jobs', {'name': 'bad.wav', 'source': base64.b64encode(b'bad').decode()})
+        job_id = job['id']
+        self.assertEqual(self.request('POST', f'/jobs/{job_id}/transcribe', {})[0], 202)
+        for _ in range(100):
+            _, job = self.request('GET', f'/jobs/{job_id}')
+            if job['status'] == 'paused':
+                break
+            time.sleep(.02)
+        self.assertEqual(job['status'], 'paused')
+        self.assertIn('음성 파일', job['result']['error'])
+        self.assertIn('imported_at', job['result'])
 
     def test_data_survives_restart_and_source_can_be_deleted_separately(self):
         status, job = self.request('POST', '/jobs', {'name': 'audio.wav', 'source': base64.b64encode(b'audio').decode()})
