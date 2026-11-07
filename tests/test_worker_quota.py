@@ -48,9 +48,11 @@ class WorkerQuotaTest(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         class Client:
             cancelled = False
+            calls = 0
             def __init__(self, key): pass
             def transcribe(self, path, on_start=None):
                 if on_start: on_start()
+                Client.calls += 1
                 entered.set()
                 release.wait(5)
                 return [{'start': 0, 'end': .5, 'text': 'kept'}]
@@ -58,7 +60,7 @@ class WorkerQuotaTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / 'source.wav'
-            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '1', str(source)], check=True)
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '605', str(source)], check=True)
             db_path = root / 'jobs.sqlite3'
             with sqlite3.connect(db_path) as db:
                 db.execute('CREATE TABLE jobs (id TEXT, name TEXT, source BLOB, status TEXT, segments TEXT, result TEXT, source_path TEXT)')
@@ -80,6 +82,7 @@ class WorkerQuotaTest(unittest.TestCase):
                 self.assertEqual(status, 'paused')
                 self.assertEqual(json.loads(result)['chunks'][0]['segments'][0]['text'], 'kept')
                 self.assertNotIn('pause_requested', json.loads(result))
+                self.assertEqual(Client.calls, 1)
 
     def test_authentication_failure_resumes_on_restart_without_losing_usage(self):
         class Client:
